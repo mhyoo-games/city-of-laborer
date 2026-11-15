@@ -1,0 +1,80 @@
+// 켜지는지 확인: 제목 → 새로 시작 → 새벽 → 인력사무소 → 오전 일(키로 움직여 봄) → 점심 → 오후 일 → 일당 → 저녁 → 일기 → 다음 날 새벽 → 저장
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+let pw;
+try { pw = require('playwright'); } catch { pw = await import(process.env.PLAYWRIGHT_PATH || 'playwright'); }
+const { chromium } = pw;
+const b = await chromium.launch({ executablePath: process.env.CHROME || undefined });
+const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
+const errs = [];
+p.on('pageerror', (e) => errs.push(String(e)));
+const shots = process.env.SHOTS;
+const fail = async (m) => { console.error(m); console.error(errs.join('\n')); await b.close(); process.exit(1); };
+const wait = (ms) => p.waitForTimeout(ms);
+const scr = () => p.evaluate(() => window.__col.screen);
+const shot = async (n) => { if (shots) await p.screenshot({ path: `${shots}/${n}.png` }); };
+const expect = async (s, m) => { const now = await scr(); if (now !== s) await fail(`${m} (지금: ${now})`); };
+const pick = async (re) => {
+  const i = await p.evaluate((src) => window.__col.opts.findIndex((o) => new RegExp(src).test(o)), re);
+  if (i < 0) await fail('메뉴에 없음: ' + re + ' / ' + (await p.evaluate(() => window.__col.opts.join(' | '))));
+  await p.evaluate((i) => window.__col.choose(i), i);
+  await wait(250);
+};
+
+await p.goto('http://localhost:8765/index.html?dev=1');
+await wait(900);
+await expect('title', '제목 화면이 안 나옴');
+await shot('01-title');
+await p.keyboard.press('KeyZ'); await wait(300);
+await expect('new', '새로 시작 화면이 안 나옴');
+await shot('02-new');
+await pick('이 사람으로 시작');
+await expect('wake', '새벽이 안 나옴');
+await shot('03-wake');
+await pick('인력사무소로');
+await expect('office', '인력사무소가 안 나옴');
+await shot('04-office');
+const ok = await p.evaluate(() => window.__col.hire());
+if (!ok) await fail('일을 못 받음');
+await expect('intro', '일 설명이 안 나옴');
+await shot('05-intro');
+await p.keyboard.press('KeyZ'); await wait(300);
+await expect('work', '일이 시작 안 됨');
+await wait(3600);
+const t0 = await p.evaluate(() => window.__col.mini.t);
+for (const k of ['ArrowRight', 'ArrowUp', 'KeyZ', 'ArrowDown', 'ArrowLeft']) { await p.keyboard.down(k); await wait(200); await p.keyboard.up(k); }
+const t1 = await p.evaluate(() => window.__col.mini.t);
+if (!(t1 > t0 + 0.5)) await fail(`미니게임 시간이 안 흐름 (${t0} → ${t1})`);
+await shot('06-work');
+await p.evaluate(() => window.__col.finishMini(80)); await wait(300);
+await expect('result', '오전 결과가 안 나옴');
+await pick('점심');
+await expect('lunch', '점심이 안 나옴');
+await shot('07-lunch');
+await pick('컵라면');
+await expect('intro', '오후 일 설명이 안 나옴');
+await p.keyboard.press('KeyZ'); await wait(3800);
+await shot('08-work2');
+await p.evaluate(() => window.__col.finishMini(90)); await wait(300);
+await expect('result', '오후 결과가 안 나옴');
+await pick('일당');
+await expect('pay', '일당 봉투가 안 나옴');
+await shot('09-pay');
+const money = await p.evaluate(() => window.__col.game.money);
+await pick('퇴근');
+await expect('evening', '저녁이 안 나옴');
+await shot('10-evening');
+await pick('포장마차');
+if (await scr() === 'story') { await shot('11-story'); for (let i = 0; i < 4 && await scr() === 'story'; i++) await pick('.'); }
+await expect('night', '일기가 안 나옴');
+await shot('12-night');
+await pick('잠들기');
+await expect('wake', '다음 날이 안 옴');
+const g = await p.evaluate(() => JSON.parse(localStorage.getItem('col_save')));
+if (!g || g.day !== 2 || g.worked !== 1) await fail('저장이 안 됨: ' + JSON.stringify(g && { day: g.day, worked: g.worked }));
+await pick('수첩');
+await expect('book', '수첩이 안 열림');
+await shot('13-book');
+await b.close();
+if (errs.length) { console.error(errs.join('\n')); process.exit(1); }
+console.log(`켜짐 확인: 하루 한 바퀴 (첫 일당 뒤 ${money}원) → 다음 날 저장`);
