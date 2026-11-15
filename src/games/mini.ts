@@ -361,6 +361,139 @@ export class Clean extends Mini {
   score(): number { return clamp(100 * Math.min(1, this.delivered / this.target()) - this.hits * 12, 0, 100); }
 }
 
+// ─────────── 6. 벽돌 쌓기: 오가는 벽돌을 아래 벽돌 위에 딱 맞게 ───────────
+export interface Brick { x: number; w: number; perfect: boolean }
+export class BrickWall extends Mini {
+  kind = 'brick' as const; dur = 45;
+  static BASE = 160; static H = 10;
+  stack: Brick[] = []; x = 40; w = 0; dir = 1; wait = 0.4; walls = 0; drops = 0; acc = 0; perfects = 0; fallen = 0; combo = 0;
+  constructor(d: number, body: number, seed: number) { super(d, body, seed); this.newWall(); }
+  w0(): number { return 62 - this.d * 18; }
+  speed(): number { return 80 + this.d * 160 + Math.min(14, this.stack.length) * 4; }
+  tol(): number { return 1 + this.body * 2; }
+  newWall(): void { this.stack = [{ x: 160, w: this.w0(), perfect: true }]; this.w = this.w0(); this.x = 40; this.dir = 1; this.walls++; }
+  top(): Brick { return this.stack[this.stack.length - 1]; }
+  update(dt: number, inp: Inp): void {
+    if (this.wait > 0) { this.wait -= dt; if (this.fallen > 0) this.fallen -= dt; return; }
+    this.x += this.dir * this.speed() * dt;
+    if (this.x > 300 - this.w / 2) { this.x = 300 - this.w / 2; this.dir = -1; }
+    if (this.x < 20 + this.w / 2) { this.x = 20 + this.w / 2; this.dir = 1; }
+    if (!inp.hit.A) return;
+    const t = this.top(), dx = this.x - t.x;
+    this.drops++;
+    if (Math.abs(dx) <= this.tol()) {
+      this.stack.push({ x: t.x, w: this.w, perfect: true });
+      this.acc += 1; this.perfects++; this.combo++;
+      this.pop(t.x, this.y(this.stack.length) - 8, this.combo >= 3 ? `딱! ${this.combo}연속` : '딱!', true, 'press');
+    } else {
+      const lo = Math.max(this.x - this.w / 2, t.x - t.w / 2), hi = Math.min(this.x + this.w / 2, t.x + t.w / 2);
+      const over = hi - lo;
+      this.combo = 0;
+      if (over < 6) {
+        this.fallen = 1.2; this.wait = 2.4;
+        this.pop(160, 90, '와르르! 처음부터', false, 'thud');
+        this.newWall();
+        return;
+      }
+      this.acc += Math.pow(over / this.w, 1.5);
+      this.w = over;
+      this.stack.push({ x: (lo + hi) / 2, w: over, perfect: false });
+      this.pop((lo + hi) / 2, this.y(this.stack.length) - 8, over / t.w > 0.8 ? '좋아' : '삐뚤다', over / t.w > 0.8, 'box');
+    }
+    this.x = this.dir > 0 ? 20 + this.w / 2 : 300 - this.w / 2;
+    this.wait = 0.35;
+  }
+  /** i층 벽돌의 화면 높이 (높이 쌓이면 아래로 밀어 보여 준다) */
+  y(i: number): number { const shift = Math.max(0, this.stack.length - 9) * BrickWall.H; return BrickWall.BASE - i * BrickWall.H + shift; }
+  target(): number { return 20 + this.d * 6; }
+  score(): number { return clamp(100 * this.acc / this.target(), 0, 100); }
+}
+
+// ─────────── 7. 함바 주방: 주문 화살표를 순서대로 ───────────
+export type Arrow = 'U' | 'D' | 'L' | 'R';
+export interface Order { seq: Arrow[]; pos: number; t: number; max: number; dish: number }
+export class Kitchen extends Mini {
+  kind = 'kitchen' as const; dur = 45;
+  orders: Order[] = []; next = 0.3; served = 0; lost = 0; slips = 0; shake = 0;
+  len(): number { return 3 + Math.floor(this.d * 4 + this.r() * 1.5); }
+  update(dt: number, inp: Inp): void {
+    this.shake = Math.max(0, this.shake - dt);
+    this.next -= dt;
+    if (this.next <= 0 && this.orders.length < 3) {
+      const n = this.len(), arrows: Arrow[] = ['U', 'D', 'L', 'R'];
+      const max = (4 + n * 0.9) * (1.3 - this.d * 0.6) * (0.8 + this.body * 0.2);
+      this.orders.push({ seq: Array.from({ length: n }, () => arrows[Math.floor(this.r() * 4)]), pos: 0, t: max, max, dish: Math.floor(this.r() * 4) });
+      this.next = (2.6 - this.d * 1.3) * (0.8 + this.r() * 0.4);
+      this.events.push('tick');
+    }
+    for (const o of this.orders) o.t -= dt;
+    const gone = this.orders.filter((o) => o.t <= 0);
+    if (gone.length) { this.lost += gone.length; this.orders = this.orders.filter((o) => o.t > 0); this.pop(250, 60, '손님이 그냥 갔다…', false, 'bad'); }
+    const o = this.orders[0];
+    const k = (['U', 'D', 'L', 'R'] as Arrow[]).find((a) => inp.hit[a]);
+    if (!o || !k) return;
+    if (o.seq[o.pos] === k) {
+      o.pos++;
+      this.events.push('turn');
+      if (o.pos >= o.seq.length) {
+        this.served++; this.orders.shift();
+        this.pop(90, 70, o.t > o.max * 0.5 ? '빨리 나왔네!' : '나왔습니다!', true, 'good');
+      }
+    } else {
+      o.pos = 0; this.slips++; this.shake = 0.25;
+      this.pop(90, 70, '앗, 처음부터', false, 'bad');
+    }
+  }
+  target(): number { return 10 + this.d * 6; }
+  score(): number {
+    const n = this.served + this.lost + this.slips * 0.3;
+    return n === 0 ? 0 : clamp(100 * (this.served / n) * Math.min(1, this.served / this.target()), 0, 100);
+  }
+}
+
+// ─────────── 8. 철근 나르기: 기우는 철근 바로잡기 + 걸림돌 넘기 ───────────
+export class Rebar extends Mini {
+  kind = 'rebar' as const; dur = 45;
+  static TRIP = 600; static GOAL = 2300;
+  th = 0; om = 0; dist = 0; stall = 0; jump = 0; drops = 0; trips = 0; stumbles = 0;
+  gust = 0; gustT = 0; rocks: number[] = []; pushing = 0;
+  constructor(d: number, body: number, seed: number) { super(d, body, seed); this.newTrip(); }
+  newTrip(): void {
+    this.rocks = [];
+    let x = 120;
+    while (x < Rebar.TRIP - 60) { this.rocks.push(x); x += 90 + this.r() * 120 - this.d * 30; }
+  }
+  pos(): number { return this.dist % Rebar.TRIP; }
+  speed(): number { return 46 + this.body * 20; }
+  update(dt: number, inp: Inp): void {
+    // 바람·어깨 흔들림
+    this.gustT -= dt;
+    if (this.gustT <= 0) { this.gust = (this.r() * 2 - 1) * (0.7 + this.d * 2.2); this.gustT = 0.5 + this.r() * 0.7; }
+    const u = ((inp.held.R ? 1 : 0) - (inp.held.L ? 1 : 0)) * 7.5 * (0.75 + this.body * 0.25);
+    this.pushing = u;
+    const k = 2.4 + this.d * 5;
+    this.om += (k * Math.sin(this.th) + this.gust + u - 1.1 * this.om) * dt;
+    this.th += this.om * dt;
+    if (Math.abs(this.th) > 0.62) {
+      this.drops++; this.stall = 2; this.th = 0; this.om = 0;
+      this.pop(80, 70, '쨍그랑! 떨어뜨렸다', false, 'thud');
+    }
+    if (this.jump > 0) { this.jump -= dt; if (this.jump <= 0) this.om += (this.r() - 0.5) * 1.2; }
+    else if (inp.hit.U && this.stall <= 0) { this.jump = 0.55; this.events.push('toss'); }
+    if (this.stall > 0) { this.stall -= dt; this.th *= 0.9; this.om *= 0.9; return; }
+    const before = this.pos();
+    this.dist += this.speed() * dt;
+    const now = this.pos();
+    if (now < before) { this.trips++; this.newTrip(); this.pop(80, 60, '한 묶음 내려놓음!', true, 'dump'); return; }
+    // 걸림돌
+    for (const x of this.rocks) if (before < x && now >= x && this.jump <= 0) {
+      this.stumbles++; this.stall = 0.6; this.om += (this.r() < 0.5 ? -1 : 1) * 2.6;
+      this.pop(80, 70, '걸렸다!', false, 'bonk');
+    }
+  }
+  score(): number { return clamp(100 * Math.min(1, this.dist / Rebar.GOAL) - this.drops * 7 - this.stumbles * 3, 0, 100); }
+}
+
 export function makeMini(kind: Kind, d: number, body: number, seed: number): Mini {
   switch (kind) {
     case 'sort': return new Sort(d, body, seed);
@@ -368,5 +501,8 @@ export function makeMini(kind: Kind, d: number, body: number, seed: number): Min
     case 'pipe': return new Pipe(d, body, seed);
     case 'crane': return new Crane(d, body, seed);
     case 'clean': return new Clean(d, body, seed);
+    case 'brick': return new BrickWall(d, body, seed);
+    case 'kitchen': return new Kitchen(d, body, seed);
+    case 'rebar': return new Rebar(d, body, seed);
   }
 }

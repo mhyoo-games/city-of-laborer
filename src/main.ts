@@ -2,12 +2,12 @@
 // 제목 → 새로 시작(사연·이름) → [새벽 → 인력사무소 → 오전 일 → 점심 → 오후 일 → 일당 → 저녁 → 일기 → 잠] 반복 → 꿈을 이룸
 import {
   JOBS, MEALS, EVENINGS, GEAR, GEAR_IDS, LICENSES, LICENSE_IDS, BACKGROUNDS, BG_IDS, NPCS, NPC_IDS, STAMPS, KINDS, DAYS, WEATHER_NAMES, WEATHER_ICON,
-  BOSS_LINES, LEVEL_NAMES, RENT, type Kind, type BgId, type MealId, type EveningId,
+  BOSS_LINES, LEVEL_NAMES, MODES, TIERS, ADVANCE, type Kind, type BgId, type MealId, type EveningId, type Mode,
 } from './core/data.ts';
 import {
   newGame, wake, apply, goHome, endRest, hireChance, chanceWord, difficulty, bodyFactor, finishSession, lunch, payday, evening, canEvening,
   todayNpc, storyReady, startStudy, buyGear, night, sleep, continueAfterGoal, parseSave, levelOf, nextXp, rank, daysToRent, weekday, won, hasSafety,
-  SAVE_KEY, LIVING, type Game, type SessionResult, type PayResult, type SleepNews,
+  SAVE_KEY, canAdvance, takeAdvance, rentOf, livingOf, type Game, type SessionResult, type PayResult, type SleepNews,
 } from './core/sim.ts';
 import { hash } from './core/rng.ts';
 import { makeMini, NO_INPUT, type Mini, type Key, type Inp } from './games/mini.ts';
@@ -42,6 +42,9 @@ let newStamps: string[] = [];
 let storyI = 0;
 let bookTab = 0;
 let pickBg: BgId = 'youth';
+let pickMode: Mode = 'normal';
+/** 가난한 정도 0~2 (그림·말에 씀) */
+const poorLevel = (x: Game | null) => !x ? 0 : x.home === 'street' || x.hunger >= 2 ? 2 : x.home === 'sauna' || x.hunger > 0 || x.money < 20000 ? 1 : 0;
 
 // ─────────── 저장 ───────────
 function loadGame(): Game | null { try { return parseSave(localStorage.getItem(SAVE_KEY)); } catch { return null; } }
@@ -119,10 +122,10 @@ function panel(cls: string, html: string, list: Opt[], row = false): void {
   ui.replaceChildren(p);
   mark();
 }
-function mark(): void {
+function mark(scroll = false): void {
   const bs = ui.querySelectorAll<HTMLButtonElement>('.opt');
   bs.forEach((b, i) => b.classList.toggle('sel', i === sel));
-  bs[sel]?.scrollIntoView({ block: 'nearest' });
+  if (scroll) bs[sel]?.scrollIntoView({ block: 'nearest' });
 }
 function choose(i: number): void {
   const o = opts[i];
@@ -135,7 +138,7 @@ function menuKey(k: Key): void {
   if (k === 'U' || k === 'L' || k === 'D' || k === 'R') {
     const d = k === 'U' || k === 'L' ? -1 : 1;
     for (let n = 0; n < opts.length; n++) { sel = (sel + d + opts.length) % opts.length; if (!opts[sel].off) break; }
-    snd.sfx('tick'); mark();
+    snd.sfx('tick'); mark(true);
   } else if (k === 'A') {
     if ((document.activeElement as HTMLElement)?.tagName === 'INPUT') return;
     choose(sel);
@@ -159,7 +162,9 @@ function drawHud(): void {
     + `<span>피로${bar(g.fatigue, 100, '#e86a5a')}</span>`
     + `<span>마음${bar(g.mood, 100, '#6ab0f0')}</span>`
     + `<span class="goal">꿈${bar(g.money, g.goal, '#ffd06a')}</span>`
-    + `<span class="money">${won(g.money)}</span>`;
+    + (g.hunger ? `<span style="color:#ff8a7a">배고픔 ${'●'.repeat(Math.min(5, g.hunger))}</span>` : '')
+    + `<span>${g.home === 'room' ? '🏠 고시원' : g.home === 'sauna' ? '♨️ 찜질방' : '🌃 거리'}</span>`
+    + `<span class="money" style="${g.money < 20000 ? 'color:#ff8a7a' : ''}">${won(g.money)}${g.advance ? ` <small>(가불 -${won(g.advance)})</small>` : ''}</span>`;
 }
 
 // ─────────── 화면 바꾸기 ───────────
@@ -201,16 +206,17 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
   new() {
     const b = BACKGROUNDS[pickBg];
     const list: Opt[] = BG_IDS.map((id) => ({ label: `${BACKGROUNDS[id].name} (${BACKGROUNDS[id].age})${id === pickBg ? ' ✔' : ''}`, sub: `꿈: ${BACKGROUNDS[id].goalName} · ${won(BACKGROUNDS[id].goal)}`, on: () => { pickBg = id; go('new'); } }));
+    for (const m of ['normal', 'hard'] as Mode[]) list.push({ label: `난이도: ${MODES[m].name}${m === pickMode ? ' ✔' : ''}`, sub: MODES[m].desc, on: () => { pickMode = m; go('new'); } });
     list.push({ label: '이 사람으로 시작', sub: '이름을 적고 시작해요', on: () => {
       const v = (ui.querySelector('input.name') as HTMLInputElement | null)?.value ?? '';
-      g = newGame(v || ({ youth: '도윤', father: '상철', elder: '영수' } as Record<BgId, string>)[pickBg], pickBg, Math.floor(Math.random() * 1e6));
+      g = newGame(v || ({ youth: '도윤', father: '상철', elder: '영수' } as Record<BgId, string>)[pickBg], pickBg, Math.floor(Math.random() * 1e6), pickMode);
       store(); go('wake');
     }, sfx: 'ok' });
     panel('wide', `<h2>누구의 하루를 살까요?</h2>
       <p>${esc(b.story)}</p>
-      <p class="muted">처음 돈 ${won(b.money)} · 체력 ${b.staminaMax} · ${b.licenses.length ? '가진 것: ' + b.licenses.map((l) => LICENSES[l].name).join(', ') : '자격증 없음'}${Object.keys(b.skill).length ? ' · 해 본 일: ' + Object.keys(b.skill).map((k) => JOBS[k as Kind].name).join(', ') : ''}</p>
+      <p class="muted">매주 나가는 돈: ${esc(b.weeklyName)} ${won(b.weekly * MODES[pickMode].weekly)} · 처음 돈 ${won(b.money)} · 체력 ${b.staminaMax} · ${b.licenses.length ? '가진 것: ' + b.licenses.map((l) => LICENSES[l].name).join(', ') : '자격증 없음'}${Object.keys(b.skill).length ? ' · 해 본 일: ' + Object.keys(b.skill).map((k) => JOBS[k as Kind].name).join(', ') : ''}</p>
       <p>이름: <input class="name" maxlength="8" placeholder="${({ youth: '도윤', father: '상철', elder: '영수' } as Record<BgId, string>)[pickBg]}"></p>`, list);
-    sel = BG_IDS.length;
+    sel = BG_IDS.length + 2;
     mark();
   },
   wake() {
@@ -224,9 +230,16 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
     if (g.weather === 'rain') lines.push('<p>🌧️ 창밖에 비가 온다. 건설 현장은 공칠 것 같다.</p>');
     if (g.weather === 'heat') lines.push('<p>🔥 폭염 주의보. 일당은 조금 더 주지만 체력이 많이 든다.</p>');
     if (g.weather === 'cold') lines.push('<p>❄️ 한파. 손이 곱는다. 일당은 조금 더 준다.</p>');
+    if (g.home === 'sauna') lines.push('<p>♨️ 찜질방 수면실에서 눈을 떴다. 허리가 뻐근하다. 방을 다시 얻으려면 일주일 치 방값이 필요하다.</p>');
+    if (g.home === 'street') lines.push(`<p>🌃 ${g.streetNights}일째 거리에서 잤다. 씻지 못한 행색 때문에 잘 안 뽑힌다. 찜질방 값(9,000원)이라도 벌어야 한다.</p>`);
+    if (g.hunger >= 3) lines.push(`<p>😵 ${g.hunger}일째 제대로 못 먹었다. 눈앞이 핑 돈다. 이대로면 쓰러진다.</p>`);
+    else if (g.hunger) lines.push('<p>🍙 어제 저녁을 굶었다. 배에서 소리가 난다. 기운이 덜 난다.</p>');
+    if (g.rentOwed) lines.push(`<p>📄 밀린 방값 ${won(g.rentOwed)}. 이번 주도 못 내면 방을 빼야 한다.</p>`);
+    if (g.advance) lines.push(`<p class="muted">가불 ${won(g.advance)}은 다음 일당에서 빠진다.</p>`);
     if (g.named) lines.push(`<p>⭐ 어제 일한 ${esc(g.named.site)}에서 오늘도 불러 줄 것 같다.</p>`);
     const dr = daysToRent(g);
-    lines.push(`<p class="muted">방값 ${won(RENT)} 내는 날: ${dr === 1 ? '오늘 밤' : dr - 1 + '일 뒤'} · 하루 생활비 ${won(LIVING)} · 꿈까지 ${won(Math.max(0, g.goal - g.money))}</p>`);
+    const bgx = BACKGROUNDS[g.bg];
+    lines.push(`<p class="muted">${dr === 1 ? '오늘 밤' : dr - 1 + '일 뒤'}: ${g.home === 'room' ? `방값 ${won(rentOf(g))} · ` : ''}${esc(bgx.weeklyName)} ${won(bgx.weekly * MODES[g.mode].weekly)} · 하루 생활비 ${won(livingOf(g))} · 꿈까지 ${won(Math.max(0, g.goal - g.money))}${g.mode === 'hard' ? ' · 고된 삶' : ''}</p>`);
     const cant = g.hurtDays > 0 || g.burnout;
     const list: Opt[] = cant
       ? [{ label: '오늘은 쉰다', on: () => { wake(g!, 'rest'); go('rest'); } }]
@@ -253,7 +266,7 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
     const bf = bodyFactor(g);
     const body = bf > 0.9 ? '쌩쌩하다' : bf > 0.75 ? '조금 지쳤다' : '많이 지쳤다 — 손이 둔하다';
     panel('right', `<h2>${session === 1 ? '오전' : '오후'} · ${esc(j.name)}</h2>
-      <p class="muted">${esc(g.job.site)} · ${LEVEL_NAMES[levelOf(g.xp[g.job.kind]) - 1]} · 몸 상태: ${body}</p>
+      <p class="muted">${esc(g.job.site)} · 일 난이도 ${TIERS[g.job.tier].name} · ${LEVEL_NAMES[levelOf(g.xp[g.job.kind]) - 1]} · 몸 상태: ${body}</p>
       <p>${esc(j.howto)}</p>${say(npc.name, j.tip)}`,
     [{ label: '일 시작 (Z)', on: startWork, sfx: 'start' }]);
   },
@@ -294,7 +307,7 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
       ${say('반장', p.comment)}
       ${p.unpaid ? `<p>💢 업체가 <b>"다음 주에 한꺼번에 줄게요"</b>라며 일당 <b>${won(p.net)}</b>을 주지 않았다. 저녁에 노동청에 진정을 넣을 수 있다.</p>` : `<table class="pay">
         ${row('기본 일당', p.base, '')}${row('숙련', p.levelBonus)}${row('날씨 수당', p.weatherBonus)}${row('자격증', p.licenseBonus)}${row('지명 · 위험', p.namedBonus)}
-        ${row('인력사무소 소개비 10%', p.fee, '-')}${row('반장님 수고비', p.tip)}
+        ${row('인력사무소 소개비 10%', p.fee, '-')}${row('가불 갚기', p.advance, '-')}${row('반장님 수고비', p.tip)}
         <tr class="sum"><td>손에 쥔 돈</td><td>${won(p.net)}</td></tr></table>`}
       <p class="muted">평판 ${p.repDelta >= 0 ? '+' : ''}${p.repDelta}${p.grade === 'S' && !p.half ? ' · 내일 이 현장에서 지명이 들어올 것 같다!' : ''}</p>`;
     panel('right', html, [{ label: '퇴근', on: () => go('evening'), sfx: 'ok' }]);
@@ -302,11 +315,11 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
   evening() {
     if (!g) return;
     const npc = todayNpc(g), story = storyReady(g, npc);
-    const list: Opt[] = (['pocha', 'cook', 'konbini', 'sauna', 'call', 'study', 'report', 'sleep'] as EveningId[])
-      .filter((id) => (id !== 'study' || g!.study) && (id !== 'report' || g!.unpaid.some((u) => u.due === null)))
+    const list: Opt[] = (['room', 'pocha', 'cook', 'konbini', 'sauna', 'call', 'study', 'report', 'sleep'] as EveningId[])
+      .filter((id) => (id !== 'study' || g!.study) && (id !== 'report' || g!.unpaid.some((u) => u.due === null)) && (id !== 'room' || g!.home !== 'room'))
       .map((id) => {
         const e = EVENINGS[id];
-        const sub = id === 'pocha' ? `${NPCS[npc].name}과 오뎅 국물에 한잔. 마음 +${e.mood}` : id === 'study' ? `${LICENSES[g!.study!].name} (${g!.studyNights}/${LICENSES[g!.study!].nights}일)` : e.desc;
+        const sub = id === 'room' ? `일주일 치 방값 ${won(rentOf(g!))}를 내고 다시 내 방으로` : id === 'cook' && g!.home !== 'room' ? '방이 없으면 밥을 해 먹을 데가 없다' : id === 'pocha' ? `${NPCS[npc].name}과 오뎅 국물에 한잔. 마음 +${e.mood}` : id === 'study' ? `${LICENSES[g!.study!].name} (${g!.studyNights}/${LICENSES[g!.study!].nights}일)` : e.desc;
         const tags: Array<[string, boolean?]> = id === 'pocha' && story ? [['이야기가 있을 것 같다']] : id === 'report' ? [['못 받은 일당', true]] : [];
         return { label: `${e.name}${e.cost ? ' · ' + won(e.cost) : ''}`, sub, tags, off: !canEvening(g!, id), on: () => {
           const ok = evening(g!, id);
@@ -317,7 +330,8 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
     list.push({ label: '🧤 작업용품 가게', sub: '장갑·보호대·안전화', on: () => go('shop') });
     if (!g.study) list.push({ label: '📚 학원 등록', sub: '이수증·자격증을 따면 갈 수 있는 현장이 늘어요', on: () => go('school') });
     list.push(bookOpt());
-    panel('right', `<h2>저녁</h2><p>${g.lastPay ? '하루 일이 끝났다. 다리가 후들거린다.' : '해가 진다.'}</p><p class="muted">마음 ${Math.round(g.mood)} · 피로 ${Math.round(g.fatigue)}</p>`, list);
+    const night0 = g.home === 'room' ? '' : g.money >= 9000 + livingOf(g) ? '<p class="muted">오늘 밤은 찜질방에서 자야 한다 (9,000원).</p>' : '<p style="color:#c8483a">찜질방 갈 돈도 없다. 오늘 밤은 거리에서…</p>';
+    panel('right', `<h2>저녁</h2><p>${g.lastPay ? '하루 일이 끝났다. 다리가 후들거린다.' : '해가 진다.'}</p>${night0}<p class="muted">마음 ${Math.round(g.mood)} · 피로 ${Math.round(g.fatigue)}</p>`, list);
   },
   shop() {
     if (!g) return;
@@ -348,12 +362,26 @@ const SCREENS: Partial<Record<Screen, () => void>> = {
   night() {
     if (!g) return;
     const stampHtml = newStamps.map((id) => `<p>🏅 도장: <b>${esc(STAMPS.find((s) => s.id === id)?.name ?? id)}</b></p>`).join('');
-    panel('right', `<h2>오늘의 일기</h2><p>${esc(diaryText)}</p>${stampHtml}<p class="muted">하루 생활비 -${won(LIVING)}${g.day % 7 === 0 ? ` · 방값 -${won(RENT)}` : ''} · 남은 돈 ${won(g.money)}</p>`,
+    panel('right', `<h2>오늘의 일기</h2><p>${esc(diaryText)}</p>${stampHtml}<p class="muted">남은 돈 ${won(g.money)}${g.home !== 'room' ? ` · 오늘 잠자리: ${g.home === 'sauna' ? '찜질방' : '거리'}` : ''}</p>`,
       [{ label: '불 끄고 잠들기', on: () => { news = sleep(g!); store(); go('wake'); } }, bookOpt()]);
   },
   ending() {
     if (!g) return;
     const b = BACKGROUNDS[g.bg];
+    if (g.endKind === 'fall') {
+      const FALL: Record<BgId, string> = {
+        youth: '새벽 인력사무소 앞에서 쓰러졌다. 눈을 떠 보니 병원이었다. 엄마에게 전화가 왔지만 받지 못했다. 사회복지사가 쉼터와 긴급 생계 지원을 알려 주었다.',
+        father: '현장 계단에서 다리가 풀렸다. 병원 침대 옆에서 아내가 울고 있었다. "왜 혼자 버텼어." 딸이 내 손을 잡았다. 처음부터, 같이 다시 해 보기로 했다.',
+        elder: '공원 벤치에서 일어나지 못했다. 구급차 소리가 멀게 들렸다. 아내가 달려왔다. "당신 고생 그만해요." 오래 일한 손이 처음으로 떨렸다.',
+      };
+      panel('wide', `<h2>쓰러졌다</h2><p>${esc(FALL[g.bg])}</p>
+        <h3>${esc(g.name)}의 기록</h3>
+        <p>${g.day}일을 버텼다 · ${g.worked}일 일했다 · 번 돈 ${won(g.earned)} · 거리에서 잔 밤 ${g.streetNights} · 도장 ${g.stamps.length}/${STAMPS.length}개</p>
+        <p class="muted">혼자 버티기 어려울 땐 도움을 청해도 괜찮아요. 다음엔 가불·찜질방·쉬는 날을 일찍 써 보세요.</p>`,
+      [{ label: '같은 사람으로 처음부터 다시', on: () => { g = newGame(g!.name, g!.bg, Math.floor(Math.random() * 1e6), g!.mode); store(); go('wake'); }, sfx: 'ok' },
+        { label: '제목으로', on: () => { try { localStorage.removeItem(SAVE_KEY); } catch { /* */ } g = null; go('title'); } }]);
+      return;
+    }
     const END: Record<BgId, string> = {
       youth: '고시원 짐은 상자 세 개면 충분했다. 작은 원룸의 창문으로 아침 해가 들어왔다. 이제 새벽 네 시 반에 일어나는 게 힘들지 않다.',
       father: '등록금 고지서를 딸에게 건넸다. "아빠, 이거…" 딸이 내 손을 잡았다. 굳은살이 박인 손이 부끄럽지 않았다.',
@@ -375,6 +403,7 @@ function officeView(msg?: string, who = '소장'): void {
   const list: Opt[] = g.board.map((job) => {
     const j = JOBS[job.kind], p = hireChance(g!, job);
     const tags: Array<[string, boolean?]> = [];
+    tags.push([TIERS[job.tier].name, job.tier === 3]);
     if (job.named) tags.push(['지명']);
     if (job.shady) tags.push(['처음 보는 업체', true]);
     if (j.build) tags.push(['건설']);
@@ -387,6 +416,7 @@ function officeView(msg?: string, who = '소장'): void {
         else { snd.sfx('no'); officeView(r.line); }
       } };
   });
+  if (canAdvance(g)) list.push({ label: `소장님께 가불 부탁하기 (+${won(ADVANCE)})`, sub: '다음 일당에서 빼요. 평판이 조금 깎여요.', on: () => { takeAdvance(g!); snd.sfx('coin'); officeView('"…알았어. 이번 한 번이야. 다음 일당에서 뺄게."'); } });
   list.push({ label: g.board.length ? '오늘은 그냥 돌아간다' : '봉고차가 다 떠났다… 돌아간다', sub: '일당 없이 하루를 보내요', on: () => { goHome(g!); go('evening'); } });
   list.push(bookOpt());
   panel('right', `<h2>새벽 인력사무소</h2>${say(who, msg ?? greet)}${g.board.length ? '' : '<p>오늘 남은 일이 없다.</p>'}<p class="muted">평판 ${Math.round(g.rep)} · 오늘 ${g.tries}번 떨어짐</p>`, list);
@@ -456,12 +486,12 @@ function endWork(): void {
 function sceneFor(): SceneName {
   switch (screen) {
     case 'title': case 'new': case 'credits': return 'title';
-    case 'wake': return 'room';
-    case 'rest': case 'night': return 'roomNight';
+    case 'wake': return g?.home === 'sauna' ? 'sauna' : g?.home === 'street' ? 'outside' : 'room';
+    case 'rest': case 'night': return g?.home === 'sauna' ? 'sauna' : g?.home === 'street' ? 'outside' : 'roomNight';
     case 'office': return 'office';
     case 'lunch': return 'lunch';
     case 'evening': case 'shop': case 'school': case 'story': return 'pocha';
-    case 'ending': return 'end';
+    case 'ending': return g?.endKind === 'fall' ? 'fall' : 'end';
     case 'book': return prev === 'office' ? 'office' : prev === 'wake' ? 'room' : prev === 'night' ? 'roomNight' : prev === 'evening' ? 'pocha' : 'room';
     default: return 'site';
   }
@@ -483,7 +513,8 @@ function frame(dt: number): void {
     if (mini.done) { text(cx, '그만! 수고했어', W / 2, H / 2, '#fff4de', 'center', 18); if (st > 0) { endWork(); } }
   } else {
     const kind = g?.job?.kind ?? g?.lastPay?.kind ?? 'clean';
-    scene(cx, sceneFor(), { wx: g?.weather ?? 'sun', t, kind, npc: screen === 'story' ? g?.story?.npc : g ? todayNpc(g) : undefined, me: screen === 'office', crowd: g?.late ? 3 : 7 });
+    scene(cx, sceneFor(), { wx: g?.weather ?? 'sun', t, kind, npc: screen === 'story' ? g?.story?.npc : g ? todayNpc(g) : undefined, me: screen === 'office', crowd: g?.late ? 3 : 7, night: screen === 'night' || screen === 'rest', poor: poorLevel(g) });
+    if (g && poorLevel(g) >= 2 && screen !== 'title' && screen !== 'ending') { const v = cx.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, 200); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(10,10,20,.55)'); cx.fillStyle = v; cx.fillRect(0, 0, W, H); }
   }
   hit = {};
 }
@@ -499,9 +530,11 @@ function loop(now: number): void {
 if (new URLSearchParams(location.search).has('dev')) {
   (window as any).__col = {
     get screen() { return screen; }, get game() { return g; }, get mini() { return mini; }, go, choose, get opts() { return opts.map((o) => o.label); },
-    newGame: (bg: BgId = 'youth') => { g = newGame('테스트', bg, 7); store(); go('wake'); },
+    newGame: (bg: BgId = 'youth', mode: Mode = 'normal') => { g = newGame('테스트', bg, 7, mode); store(); go('wake'); },
+    poor: (home: 'room' | 'sauna' | 'street', hunger = 0, money = 3000) => { if (!g) return; g.home = home; g.hunger = hunger; g.money = money; g.streetNights = home === 'street' ? 2 : 0; },
+    fall: () => { if (!g) return; g.endKind = 'fall'; g.phase = 'ending'; go('ending'); },
     hire: () => { const job = g && g.phase === 'office' ? g.board.find((b) => hireChance(g!, b) > 0) : null; if (!g || !job) return false; const r = apply(g, job.id, -1); if (r.ok) { session = 1; go('intro'); } return r.ok; },
-    play: (kind: Kind) => { if (!g) g = newGame('테스트', 'elder', 7); g.licenses = ['safety', 'signal']; g.phase = 'work1'; g.job = { id: 'x', kind, site: JOBS[kind].sites[0], pay: 150000, shady: false, named: false }; session = 1; startWork(); countdown = 0; },
+    play: (kind: Kind) => { if (!g) g = newGame('테스트', 'elder', 7); g.licenses = ['safety', 'signal']; g.phase = 'work1'; g.job = { id: 'x', kind, site: JOBS[kind].sites[0], pay: 150000, shady: false, named: false, tier: 2 }; session = 1; startWork(); countdown = 0; },
     finishMini: (score = 80) => { if (mini) { (mini as any).score = () => score; mini.done = true; } },
   };
 }

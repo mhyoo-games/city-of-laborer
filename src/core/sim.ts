@@ -1,18 +1,19 @@
 // 노동자의 도시 — 하루 규칙. 화면과 떨어진 순수 계산 (node --test로 바로 테스트).
 // 하루: 새벽 기상 → 인력사무소(일 고르기·뽑히기) → 오전 일 → 점심 → 오후 일 → 일당 → 저녁 → 일기 → 잠
 import {
-  JOBS, KINDS, LICENSES, GEAR, MEALS, EVENINGS, BACKGROUNDS, NPCS, NPC_IDS, LEVEL_XP, RANKS, RENT, FEE, BOSS_LINES, DIARY, STAMPS, LICENSE_IDS,
+  JOBS, KINDS, LICENSES, GEAR, MEALS, EVENINGS, BACKGROUNDS, NPCS, NPC_IDS, LEVEL_XP, RANKS, FEE, BOSS_LINES, DIARY, STAMPS, LICENSE_IDS,
+  TIERS, MODES, SAUNA_NIGHT, ADVANCE, BILLS, type Mode, type Home,
   type Kind, type LicenseId, type GearId, type MealId, type EveningId, type BgId, type NpcId, type Weather,
 } from './data.ts';
 import { rand, pick, hash } from './rng.ts';
 
 export type Phase = 'wake' | 'office' | 'work1' | 'lunch' | 'work2' | 'pay' | 'evening' | 'night' | 'rest' | 'ending';
 
-export interface Job { id: string; kind: Kind; site: string; pay: number; shady: boolean; named: boolean }
+export interface Job { id: string; kind: Kind; site: string; pay: number; shady: boolean; named: boolean; tier: 1 | 2 | 3 }
 export interface PayResult {
   kind: Kind; site: string; grade: string; score: number; scores: number[];
   base: number; levelBonus: number; weatherBonus: number; licenseBonus: number; namedBonus: number; tip: number;
-  fee: number; net: number; unpaid: boolean; half: boolean; comment: string; repDelta: number; levelUp: boolean; level: number;
+  fee: number; advance: number; net: number; unpaid: boolean; half: boolean; comment: string; repDelta: number; levelUp: boolean; level: number;
 }
 export interface Unpaid { amount: number; site: string; due: number | null }
 
@@ -28,7 +29,12 @@ export interface Game {
   streak: number; worked: number; noJob: number; rested: number; sCount: number;
   unpaid: Unpaid[]; lunchbox: boolean; stamps: string[]; diary: Array<{ day: number; text: string }>;
   today: string[]; lastPay: PayResult | null; story: { npc: NpcId; lines: string[] } | null; tries: number;
+  // 살아남기
+  mode: Mode; home: Home; hunger: number; rentOwed: number; advance: number; streetNights: number; endKind: 'goal' | 'fall';
 }
+/** 이번 판의 방값·생활비 */
+export const rentOf = (g: Game) => MODES[g.mode].rent;
+export const livingOf = (g: Game) => MODES[g.mode].living;
 
 // ─────────── 숫자 도우미 ───────────
 export const won = (n: number) => (n < 0 ? '-' : '') + Math.abs(Math.round(n)).toLocaleString('ko-KR') + '원';
@@ -43,7 +49,7 @@ export function weekday(day: number): number { return (day - 1) % 7; }
 export const daysToRent = (g: Game) => 7 - ((g.day - 1) % 7);
 const zero = <T extends string>(ks: readonly T[]): Record<T, number> => Object.fromEntries(ks.map((k) => [k, 0])) as Record<T, number>;
 
-export function newGame(name: string, bg: BgId, seed = Date.now() % 100000): Game {
+export function newGame(name: string, bg: BgId, seed = Date.now() % 100000, mode: Mode = 'normal'): Game {
   const b = BACKGROUNDS[bg];
   const xp = zero(KINDS);
   for (const k of KINDS) xp[k] = b.skill[k] ?? 0;
@@ -57,6 +63,7 @@ export function newGame(name: string, bg: BgId, seed = Date.now() % 100000): Gam
     hurtDays: 0, burnout: false, named: null, namedStreak: 0,
     streak: 0, worked: 0, noJob: 0, rested: 0, sCount: 0,
     unpaid: [], lunchbox: false, stamps: [], diary: [], today: [], lastPay: null, story: null, tries: 0,
+    mode, home: 'room', hunger: 0, rentOwed: 0, advance: 0, streetNights: 0, endKind: 'goal',
   };
   return g;
 }
@@ -76,9 +83,9 @@ const gearMul = (g: Game, key: 'stamina' | 'fatigue' | 'injury') => g.gear.reduc
 export const hasSafety = (g: Game) => g.licenses.includes('safety');
 
 /** 일당 계산 (숙련·날씨·자격증·지명·위험한 업체) */
-export function payFor(g: Game, kind: Kind, shady: boolean, named: boolean, weather = g.weather) {
+export function payFor(g: Game, kind: Kind, shady: boolean, named: boolean, weather = g.weather, tier: 1 | 2 | 3 = 2) {
   const j = JOBS[kind];
-  const base = j.base;
+  const base = Math.round(j.base * TIERS[tier].pay / 5000) * 5000;
   const levelBonus = base * 0.08 * (levelOf(g.xp[kind]) - 1);
   const weatherBonus = weather === 'heat' || weather === 'cold' ? base * 0.1 : 0;
   const licenseBonus = (kind === 'sort' && g.licenses.includes('forklift') ? base * 0.25 : 0) + (kind === 'pipe' && g.licenses.includes('welding') ? base * 0.3 : 0);
@@ -97,7 +104,7 @@ export function makeBoard(g: Game): Job[] {
   const n = clamp(3 + Math.floor(r() * 3) - (g.late ? 1 : 0) - (rain ? 1 : 0), 2, 5);
   const out: Job[] = [];
   if (g.named && !(rain && JOBS[g.named.kind].build)) {
-    out.push({ id: 'named', kind: g.named.kind, site: g.named.site, pay: payFor(g, g.named.kind, false, true).total, shady: false, named: true });
+    out.push({ id: 'named', kind: g.named.kind, site: g.named.site, pay: payFor(g, g.named.kind, false, true).total, shady: false, named: true, tier: 2 });
   }
   let guard = 0;
   while (out.length < n && guard++ < 40) {
@@ -105,13 +112,15 @@ export function makeBoard(g: Game): Job[] {
     const site = pick(r, JOBS[kind].sites);
     if (out.some((o) => o.kind === kind && o.site === site)) continue;
     const shady = r() < 0.16 && !out.some((o) => o.shady);
-    out.push({ id: 'j' + out.length, kind, site: shady ? '(처음 보는 업체) ' + site : site, pay: payFor(g, kind, shady, false).total, shady, named: false });
+    const tr = r(), hardDays = Math.min(0.15, g.day * 0.005);
+    const tier: 1 | 2 | 3 = tr < 0.3 - hardDays ? 1 : tr < 0.78 - hardDays ? 2 : 3;
+    out.push({ id: 'j' + out.length, kind, site: shady ? '(처음 보는 업체) ' + site : site, pay: payFor(g, kind, shady, false, g.weather, tier).total, shady, named: false, tier });
   }
   // 공장·물류 일은 하나는 꼭 있다 (이수증이 없는 첫날에도 지원할 곳이 있게)
   if (!out.some((o) => !JOBS[o.kind].build)) {
     const kind = pick(r, KINDS.filter((k) => !JOBS[k].build));
     const i = out.findIndex((o) => !o.named);
-    const job: Job = { id: 'jf', kind, site: pick(r, JOBS[kind].sites), pay: payFor(g, kind, false, false).total, shady: false, named: false };
+    const job: Job = { id: 'jf', kind, site: pick(r, JOBS[kind].sites), pay: payFor(g, kind, false, false).total, shady: false, named: false, tier: 2 };
     if (i >= 0) out[i] = job; else out.push(job);
   }
   return out;
@@ -125,6 +134,9 @@ export function hireChance(g: Game, job: Job): number {
   if (job.named) return 1;
   let p = 0.28 + g.rep * 0.006 + (levelOf(g.xp[job.kind]) - 1) * 0.07;
   if (g.late) p -= 0.25;
+  p += TIERS[job.tier ?? 2].hire + MODES[g.mode].hire;
+  if (g.home === 'street') p -= 0.12;           // 씻지 못한 행색
+  if (g.hunger >= 2) p -= 0.05;
   if (job.shady) p += 0.25;
   if (g.bg === 'elder' && j.hard >= 3) p -= 0.2;      // 힘쓰는 일은 젊은 사람부터
   if (g.bg === 'youth' && j.hard >= 3) p += 0.1;
@@ -213,13 +225,15 @@ export function workCost(g: Game, kind: Kind, score: number) {
 export function bodyFactor(g: Game): number { return clamp(0.55 + (g.stamina / 100) * 0.45 - Math.max(0, g.fatigue - 60) / 200, 0.5, 1); }
 /** 미니게임 난이도 0~1 (숙련이 오르면 쉬워지고, 오후·날씨는 어려워짐) */
 export function difficulty(g: Game, kind: Kind, session: 1 | 2): number {
-  return clamp(0.35 + (session === 2 ? 0.15 : 0) + (g.day > 10 ? 0.1 : 0) - (levelOf(g.xp[kind]) - 1) * 0.06 + (g.weather === 'heat' ? 0.05 : 0), 0.1, 0.8);
+  const tier = TIERS[g.job?.tier ?? 2].d;
+  return clamp(0.35 + (session === 2 ? 0.15 : 0) + (g.day > 10 ? 0.1 : 0) - (levelOf(g.xp[kind]) - 1) * 0.06 + (g.weather === 'heat' ? 0.05 : 0) + tier + MODES[g.mode].d, 0.1, 1);
 }
 
 export interface SessionResult { hurt: boolean; levelUp: boolean; xp: number; stamina: number; fatigue: number; sentHome?: boolean }
 /** 오전 점수가 이보다 낮으면 반나절만 하고 돌려보낸다 */
 export const SEND_HOME = 30;
 /** 하루 생활비 (버스비·통신비·빨래·커피) */
+/** 보통 모드 하루 생활비 (고된 삶은 livingOf) */
 export const LIVING = 8000;
 export function finishSession(g: Game, score: number, roll: number): SessionResult {
   if (!g.job || (g.phase !== 'work1' && g.phase !== 'work2')) return { hurt: false, levelUp: false, xp: 0, stamina: 0, fatigue: 0 };
@@ -236,7 +250,7 @@ export function finishSession(g: Game, score: number, roll: number): SessionResu
   // 다침: 위험 × 피로 × 서툼 × 보호구
   const tired = g.fatigue > 60 ? (g.fatigue - 50) / 12 : 0.4;
   const sloppy = score < 40 ? 2 : score < 60 ? 1.3 : 1;
-  const pHurt = JOBS[kind].risk * 0.012 * tired * sloppy * gearMul(g, 'injury') * (g.stamina < 15 ? 2 : 1);
+  const pHurt = JOBS[kind].risk * 0.012 * tired * sloppy * gearMul(g, 'injury') * (g.stamina < 15 ? 2 : 1) * MODES[g.mode].injury * (g.hunger >= 2 ? 1.5 : 1);
   const hurt = roll < pHurt;
   if (hurt) {
     g.hurtDays = 2 + (JOBS[kind].risk >= 2 ? 1 : 0);
@@ -277,8 +291,10 @@ export function payday(g: Game, roll: number): PayResult | null {
   const tip = grade === 'S' && r() < 0.5 ? 10000 : 0;      // 반장님이 챙겨 주는 수고비
   let gross = p.total * (half ? 0.5 : 1);
   const fee = Math.round(gross * FEE / 1000) * 1000;
-  const net = gross - fee + tip;
   const unpaid = job.shady && roll < 0.35;
+  const adv = unpaid ? 0 : Math.min(g.advance, gross - fee + tip);
+  g.advance -= adv;
+  const net = gross - fee + tip - adv;
   if (unpaid) {
     g.unpaid.push({ amount: net, site: job.site, due: null });
     g.today.push(DIARY.unpaid);
@@ -296,6 +312,7 @@ export function payday(g: Game, roll: number): PayResult | null {
   g.worked++;
   g.streak++;
   if (grade === 'S') g.sCount++;
+  if (grade === 'S' && job.tier === 3 && !g.stamps.includes('tough')) g.stamps.push('tough');
   if (grade === 'S' && !half) {
     g.namedStreak = job.named ? g.namedStreak + 1 : 0;
     g.named = { kind, site: job.site.replace('(처음 보는 업체) ', '') };
@@ -305,7 +322,7 @@ export function payday(g: Game, roll: number): PayResult | null {
   g.today.push(pick(r, DIARY.grade[grade]));
   const res: PayResult = {
     kind, site: job.site, grade, score, scores: [...g.scores], base: p.base * (half ? 0.5 : 1), levelBonus: p.levelBonus, weatherBonus: p.weatherBonus,
-    licenseBonus: p.licenseBonus, namedBonus: p.namedBonus + p.shadyBonus, tip, fee, net, unpaid, half, comment, repDelta, levelUp: false, level: lv,
+    licenseBonus: p.licenseBonus, namedBonus: p.namedBonus + p.shadyBonus, tip, fee, advance: adv, net, unpaid, half, comment, repDelta, levelUp: false, level: lv,
   };
   g.lastPay = res;
   g.job = null;
@@ -327,6 +344,8 @@ export function canEvening(g: Game, id: EveningId): boolean {
   if (g.money < e.cost) return false;
   if (id === 'study') return !!g.study;
   if (id === 'report') return g.unpaid.some((u) => u.due === null);
+  if (id === 'cook') return g.home === 'room';
+  if (id === 'room') return g.home !== 'room' && g.money >= rentOf(g);
   return true;
 }
 export function evening(g: Game, id: EveningId): boolean {
@@ -367,7 +386,14 @@ export function evening(g: Game, id: EveningId): boolean {
       break;
     }
     case 'konbini': g.today.push('편의점 도시락으로 저녁을 때웠다.'); break;
-    case 'sleep': g.today.push('일찍 누웠다.'); break;
+    case 'sleep': g.today.push(g.home === 'room' ? '일찍 누웠다.' : '일찍 몸을 뉘었다.'); break;
+    case 'room': {
+      g.money -= rentOf(g);
+      g.home = 'room'; g.streetNights = 0;
+      g.today.push(DIARY.backHome);
+      if (!g.stamps.includes('comeback')) g.stamps.push('comeback');
+      break;
+    }
   }
   g.phase = 'night';
   return true;
@@ -394,18 +420,67 @@ export function buyGear(g: Game, id: GearId): boolean {
 export function night(g: Game): string {
   if (g.phase !== 'night') return '';
   const lines = [`${g.day}일째. ${DIARY.weather[g.weather]}`, ...g.today];
-  g.money -= LIVING;
+  const r = rand(hash(g.seed, g.day, 61));
+  // 하루 생활비: 못 내면 굶는다 (돈은 0 밑으로 내려가지 않는다)
+  const living = livingOf(g);
+  if (g.money >= living) { g.money -= living; g.hunger = 0; }
+  else {
+    g.money = 0; g.hunger++;
+    g.mood = clamp(g.mood - 8, 0, 100);
+    lines.push(pick(r, DIARY.hungry));
+  }
+  // 일주일마다 꼭 나가는 돈 (학자금·집 생활비·약값)
   if (g.day % 7 === 0) {
-    g.money -= RENT;
-    lines.push(g.money >= 0 ? DIARY.rent : DIARY.noRent);
-    if (g.money < 0) g.mood = clamp(g.mood - 15, 0, 100);
+    const b = BACKGROUNDS[g.bg], amt = Math.round(b.weekly * MODES[g.mode].weekly / 1000) * 1000;
+    if (g.money >= amt) { g.money -= amt; lines.push(`${b.weeklyName}: ${won(amt)}.`); }
+    else { g.mood = clamp(g.mood - 12, 0, 100); lines.push(`이번 주는 ${b.weeklyName}를 못 했다. ${b.family} 얼굴이 떠올랐다.`); }
+  }
+  // 가끔 날아오는 청구서
+  if (r() < MODES[g.mode].bills) {
+    const [what, amt] = pick(r, BILLS);
+    g.money = Math.max(0, g.money - amt);
+    lines.push(`${what} (${won(amt)})`);
+  }
+  // 방값 (일주일마다). 두 주 밀리면 방에서 나와야 한다
+  if (g.home === 'room' && g.day % 7 === 0) {
+    const rent = rentOf(g);
+    if (g.money >= rent + g.rentOwed) { g.money -= rent + g.rentOwed; g.rentOwed = 0; lines.push(DIARY.rent); }
+    else {
+      g.rentOwed += rent;
+      g.mood = clamp(g.mood - 15, 0, 100);
+      if (g.rentOwed >= rent * 2) { g.home = 'sauna'; g.rentOwed = 0; lines.push(DIARY.evicted); g.mood = clamp(g.mood - 10, 0, 100); }
+      else lines.push(DIARY.noRent);
+    }
+  }
+  // 방이 없으면: 찜질방 값이 있으면 찜질방, 없으면 거리
+  if (g.home !== 'room') {
+    if (g.money >= SAUNA_NIGHT) { g.money -= SAUNA_NIGHT; g.home = 'sauna'; g.streetNights = 0; g.mood = clamp(g.mood - 2, 0, 100); lines.push(pick(r, DIARY.sauna)); }
+    else {
+      g.home = 'street'; g.streetNights++;
+      g.mood = clamp(g.mood - 10, 0, 100);
+      lines.push(pick(r, DIARY.street));
+      const cold = g.weather === 'cold' || g.weather === 'rain' ? 0.35 : 0.12;
+      if (g.hurtDays === 0 && r() < cold) { g.hurtDays = 2; lines.push(DIARY.sick); }
+    }
   }
   const text = lines.join(' ');
   g.diary.push({ day: g.day, text });
   if (g.diary.length > 120) g.diary.shift();
   checkStamps(g);
-  if (!g.goalDone && g.money >= g.goal) { g.goalDone = true; g.phase = 'ending'; }
+  // 오래 굶거나 오래 거리에서 자면 쓰러진다
+  if (g.hunger >= 5 || g.streetNights >= 7) { g.phase = 'ending'; g.endKind = 'fall'; return text; }
+  if (!g.goalDone && g.money >= g.goal) { g.goalDone = true; g.endKind = 'goal'; g.phase = 'ending'; }
   return text;
+}
+
+/** 소장님 가불 (돈이 바닥났을 때 한 번. 다음 일당에서 뺀다) */
+export function canAdvance(g: Game): boolean { return g.phase === 'office' && g.advance === 0 && g.money < 30000 && g.rep >= 10; }
+export function takeAdvance(g: Game): boolean {
+  if (!canAdvance(g)) return false;
+  g.money += ADVANCE; g.advance = ADVANCE;
+  g.rep = clamp(g.rep - 3, 0, 100);
+  g.today.push(DIARY.advance);
+  return true;
 }
 
 export function checkStamps(g: Game): string[] {
@@ -416,7 +491,8 @@ export function checkStamps(g: Game): string[] {
   add('week', g.day >= 7);
   add('streak5', g.streak >= 5);
   add('named3', g.namedStreak >= 3);
-  add('allJobs', KINDS.every((k) => g.done[k] > 0));
+  add('allJobs', (['clean', 'sort', 'line', 'pipe', 'crane'] as Kind[]).every((k) => g.done[k] > 0));
+  add('allNew', KINDS.every((k) => g.done[k] > 0));
   add('license', g.licenses.length > BACKGROUNDS[g.bg].licenses.length);
   add('allLicense', LICENSE_IDS.every((l) => g.licenses.includes(l)));
   add('story', NPC_IDS.some((n) => g.seen[n] >= NPCS[n].stories.length));
@@ -444,9 +520,12 @@ export function sleep(g: Game): SleepNews {
   if (g.phase !== 'night') return news;
   g.day++;
   if (g.hurtDays > 0) { g.hurtDays--; news.healed = g.hurtDays === 0; }
-  g.fatigue = clamp(g.fatigue - 16 * g.recover, 0, 100);
-  g.stamina = clamp(g.staminaMax - g.fatigue * 0.45, 25, g.staminaMax);
-  g.mood = clamp(g.mood + (50 - g.mood) * 0.08, 0, 100);
+  // 어디서 잤는지가 회복을 정한다: 방 > 찜질방 > 거리, 굶으면 기운이 안 난다
+  const bed = g.home === 'room' ? 1 : g.home === 'sauna' ? 0.8 : 0.5;
+  g.fatigue = clamp(g.fatigue - 16 * g.recover * bed, 0, 100);
+  const cap = g.staminaMax - g.hunger * 12 - (g.home === 'street' ? 12 : 0);
+  g.stamina = clamp(cap - g.fatigue * 0.45, 20, g.staminaMax);
+  g.mood = clamp(g.mood + ((g.home === 'room' ? 50 : g.home === 'sauna' ? 40 : 25) - g.mood) * 0.08, 0, 100);
   if (g.mood <= 5) { g.burnout = true; news.burnout = true; }
   for (const u of g.unpaid) if (u.due !== null && u.due <= g.day) { g.money += u.amount; g.earned += u.amount; news.repaid += u.amount; }
   if (news.repaid > 0) { g.unpaid = g.unpaid.filter((u) => !(u.due !== null && u.due <= g.day)); g.today = []; if (!g.stamps.includes('unpaid')) g.stamps.push('unpaid'); }
@@ -479,10 +558,14 @@ export function parseSave(raw: unknown): Game | null {
   if (Array.isArray(o.stamps)) g.stamps = o.stamps.filter((s: any) => STAMPS.some((t) => t.id === s));
   if (Array.isArray(o.diary)) g.diary = o.diary.filter((d: any) => d && typeof d.text === 'string').slice(-120).map((d: any) => ({ day: Number(d.day) || 0, text: d.text }));
   if (Array.isArray(o.unpaid)) g.unpaid = o.unpaid.filter((u: any) => u && Number(u.amount) > 0).map((u: any) => ({ amount: Number(u.amount), site: String(u.site ?? ''), due: u.due == null ? null : Number(u.due) }));
+  if (MODES[o.mode as Mode]) g.mode = o.mode;
+  if (o.home === 'room' || o.home === 'sauna' || o.home === 'street') g.home = o.home;
+  num('hunger', 0, 9); num('rentOwed', 0, 1e8); num('advance', 0, 1e7); num('streetNights', 0, 99);
   if (o.named && JOBS[o.named.kind as Kind]) g.named = { kind: o.named.kind, site: String(o.named.site) };
   g.weather = weatherFor(g.seed, g.day);
   // 하루 중간에 껐으면 그날 새벽부터 다시 (일당을 두 번 받는 일이 없게)
   g.phase = o.phase === 'ending' && g.money >= g.goal ? 'ending' : 'wake';
+  if (o.phase === 'ending' && o.endKind === 'fall') { g.phase = 'ending'; g.endKind = 'fall'; }
   if (g.phase === 'wake' && !g.goalDone && g.money >= g.goal) { g.goalDone = true; }
   return g;
 }

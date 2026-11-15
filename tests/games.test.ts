@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Sort, Line, Pipe, Crane, Clean, makeMini, rot, E, Wd, type Mini, type Inp, type Key } from '../src/games/mini.ts';
+import { Sort, Line, Pipe, Crane, Clean, BrickWall, Kitchen, Rebar, makeMini, rot, E, Wd, type Mini, type Inp, type Key } from '../src/games/mini.ts';
 import { KINDS } from '../src/core/data.ts';
 import { rand } from '../src/core/rng.ts';
 
@@ -87,17 +87,37 @@ function cleanBot(m: Clean): Inp {
   return { held, hit: {} };
 }
 
-const BOTS: Record<string, (m: any, f: number) => Inp> = { sort: sortBot, line: lineBot, pipe: pipeBot, crane: craneBot, clean: cleanBot };
+function brickBot(m: BrickWall): Inp {
+  if (m.wait > 0) return idle();
+  // 다음 칸에서 맞을 자리면 누른다
+  const t = m.top(), nx = m.x + m.dir * m.speed() / 60;
+  return Math.abs(m.x - t.x) <= 1.2 || (Math.abs(nx - t.x) > Math.abs(m.x - t.x) && Math.abs(m.x - t.x) <= m.tol()) ? { held: { A: true }, hit: { A: true } } : idle();
+}
+function kitchenBot(m: Kitchen, f: number): Inp {
+  const o = m.orders[0];
+  if (!o || f % 6) return idle();
+  const k = o.seq[o.pos];
+  return { held: { [k]: true }, hit: { [k]: true } };
+}
+function rebarBot(m: Rebar): Inp {
+  const held: Partial<Record<Key, boolean>> = {}, hit: Partial<Record<Key, boolean>> = {};
+  const v = m.th + 0.4 * m.om;
+  if (v > 0.01) held.L = true; else if (v < -0.01) held.R = true;
+  const p = m.pos(), ahead = m.rocks.find((x) => x > p);
+  if (ahead !== undefined && ahead - p < 14 && m.jump <= 0) { held.U = true; hit.U = true; }
+  return { held, hit };
+}
+const BOTS: Record<string, (m: any, f: number) => Inp> = { sort: sortBot, line: lineBot, pipe: pipeBot, crane: craneBot, clean: cleanBot, brick: brickBot, kitchen: kitchenBot, rebar: rebarBot };
 
 test('다섯 가지 일: 잘하면 높고, 가만있으면 0점 가까이, 막 누르면 낮다', () => {
   for (const k of KINDS) {
-    for (const d of [0.2, 0.5, 0.8]) {
+    for (const d of [0.2, 0.5, 0.8, 1]) {
       const good = play(makeMini(k, d, 1, 7), BOTS[k]);
       const tired = play(makeMini(k, d, 0.55, 7), BOTS[k]);
       const none = play(makeMini(k, d, 1, 7), idle);
       const mash = play(makeMini(k, d, 1, 7), masher(3));
       console.log(`  ${k} 어려움 ${d}: 잘함 ${good.toFixed(0)} · 지침 ${tired.toFixed(0)} · 가만 ${none.toFixed(0)} · 막 누름 ${mash.toFixed(0)}`);
-      assert.ok(good >= 80, `${k} ${d} 잘하는 봇 ${good}`);
+      assert.ok(good >= (d >= 1 ? 72 : 80), `${k} ${d} 잘하는 봇 ${good}`);
       assert.ok(none <= 15, `${k} ${d} 가만있기 ${none}`);
       assert.ok(mash <= 55, `${k} ${d} 막 누르기 ${mash}`);
     }

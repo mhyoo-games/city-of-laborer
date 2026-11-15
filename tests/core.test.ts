@@ -190,13 +190,73 @@ test('포장마차에서 이야기가 하나씩 열린다', () => {
   assert.ok(g.stamps.includes('story'));
 });
 
-test('방값은 일주일마다, 못 내면 마음이 무너진다', () => {
+test('방값은 일주일마다, 두 주 밀리면 방에서 나온다', () => {
   const g = S.newGame('a', 'youth', 1);
-  g.money = 50000;
-  g.day = 7; g.phase = 'night';
+  g.money = 200000; g.day = 7; g.phase = 'night';
   S.night(g);
-  assert.equal(g.money, 50000 - RENT - S.LIVING);
+  const must = 200000 - S.rentOf(g) - S.livingOf(g) - 60000;   // 방값·생활비·학자금
+  assert.ok(g.money <= must && g.money >= must - 70000, '방값이 나갔다 ' + g.money);
+  assert.equal(g.rentOwed, 0);
+  // 못 내면 밀리고, 또 못 내면 쫓겨난다
+  g.money = 20000; g.day = 14; g.phase = 'night'; S.night(g);
+  assert.equal(g.home, 'room'); assert.equal(g.rentOwed, S.rentOf(g));
+  g.money = 20000; g.day = 21; g.phase = 'night'; S.night(g);
+  assert.notEqual(g.home, 'room');
   assert.ok(g.mood < 60);
+});
+
+test('살아남기: 굶기·찜질방·거리·다시 방으로·쓰러짐', () => {
+  const g = S.newGame('a', 'youth', 2);
+  g.home = 'sauna'; g.money = 20000; g.day = 3; g.phase = 'night';
+  S.night(g);
+  assert.equal(g.home, 'sauna'); assert.equal(g.hunger, 0);
+  assert.equal(g.money, 20000 - S.livingOf(g) - 9000);
+  // 돈이 없으면 굶고 거리에서 잔다 → 다음 날 기운이 없다
+  g.money = 3000; g.phase = 'night'; g.hurtDays = 0; S.night(g);
+  assert.equal(g.hunger, 1); assert.equal(g.home, 'street'); assert.equal(g.money, 0);
+  S.sleep(g);
+  assert.ok(g.stamina <= g.staminaMax - 24, '거리·배고픔이면 체력이 덜 찬다 ' + g.stamina);
+  // 행색이 초라하면 덜 뽑힌다
+  const job = { id: 'x', kind: 'line' as const, site: 's', pay: 1, shady: false, named: false, tier: 2 as const };
+  const p0 = S.hireChance(g, job); g.home = 'room'; g.hunger = 0; const p1 = S.hireChance(g, job);
+  assert.ok(p1 > p0 + 0.1);
+  // 다시 방으로
+  g.home = 'sauna'; g.money = 200000; g.phase = 'evening';
+  assert.ok(S.canEvening(g, 'room')); assert.ok(!S.canEvening(g, 'cook'));
+  S.evening(g, 'room');
+  assert.equal(g.home, 'room'); assert.equal(g.money, 200000 - S.rentOf(g)); assert.ok(g.stamps.includes('comeback'));
+  // 닷새 굶으면 쓰러진다
+  const h = S.newGame('b', 'youth', 3);
+  for (let i = 0; i < 5 && h.phase !== 'ending'; i++) { h.money = 0; h.phase = 'night'; S.night(h); if (h.phase !== 'ending') S.sleep(h); }
+  assert.equal(h.phase, 'ending'); assert.equal(h.endKind, 'fall');
+});
+
+test('가불: 바닥났을 때 한 번, 다음 일당에서 뺀다', () => {
+  const g = S.newGame('a', 'youth', 4);
+  g.money = 10000; S.wake(g, 'up');
+  assert.ok(S.canAdvance(g));
+  assert.ok(S.takeAdvance(g)); assert.equal(g.money, 60000); assert.ok(!S.canAdvance(g));
+  const job = g.board.find((b) => S.hireChance(g, b) > 0)!;
+  S.apply(g, job.id, -1);
+  S.finishSession(g, 80, 1); S.lunch(g, 'ramen'); S.finishSession(g, 80, 1);
+  const p = S.payday(g, 1)!;
+  assert.equal(p.advance, 50000); assert.equal(g.advance, 0);
+});
+
+test('일마다 난이도: 빡센 일은 더 주고 더 어렵다, 고된 삶은 비싸다', () => {
+  const g = S.newGame('a', 'youth', 5);
+  assert.ok(S.payFor(g, 'line', false, false, 'sun', 3).total > S.payFor(g, 'line', false, false, 'sun', 1).total);
+  g.job = { id: 'x', kind: 'line', site: 's', pay: 1, shady: false, named: false, tier: 1 };
+  const d1 = S.difficulty(g, 'line', 1);
+  g.job.tier = 3;
+  assert.ok(S.difficulty(g, 'line', 1) > d1 + 0.3);
+  const h = S.newGame('b', 'youth', 5, 'hard');
+  assert.ok(S.rentOf(h) > S.rentOf(g) && S.livingOf(h) > S.livingOf(g));
+  h.job = { ...g.job }; assert.ok(S.difficulty(h, 'line', 1) > S.difficulty(g, 'line', 1));
+  // 게시판에 세 가지 난이도가 다 나온다
+  const seen = new Set<number>();
+  for (let day = 1; day < 40; day++) { g.day = day; for (const j of S.makeBoard(g)) seen.add(j.tier); }
+  assert.deepEqual([...seen].sort(), [1, 2, 3]);
 });
 
 test('저장: 고쳐서 읽기, 망가진 값도 받아 준다', () => {
@@ -213,13 +273,15 @@ test('저장: 고쳐서 읽기, 망가진 값도 받아 준다', () => {
 });
 
 /** 사람처럼 하루를 보내는 봇: skill = 미니게임 평균 점수 */
-function career(bg: BgId, skill: number, days: number, seed: number) {
-  const g = S.newGame('봇', bg, seed);
+function career(bg: BgId, skill: number, days: number, seed: number, mode: 'normal' | 'hard' = 'normal') {
+  const g = S.newGame('봇', bg, seed, mode);
+  let fell = 0, evicted = 0, hungry = 0;
   const r = rand(seed);
   let ended = 0;
   for (let d = 0; d < days; d++) {
-    if (g.phase === 'ending') { if (!ended) ended = g.day; S.continueAfterGoal(g); }
+    if (g.phase === 'ending') { if (g.endKind === 'fall') { fell = g.day; break; } if (!ended) ended = g.day; S.continueAfterGoal(g); }
     S.wake(g, g.fatigue > 75 ? 'rest' : 'up');
+    if (g.phase === 'office' && S.canAdvance(g)) S.takeAdvance(g);
     if (g.phase === 'office') {
       // 먼저 필요한 이수증부터
       while (g.phase === 'office' && g.board.length) {
@@ -231,7 +293,8 @@ function career(bg: BgId, skill: number, days: number, seed: number) {
     }
     if (g.phase === 'rest') S.endRest(g);
     if (g.phase === 'work1') {
-      const sc = () => Math.max(0, Math.min(100, skill + (r() - 0.5) * 20));
+      const tier = g.job!.tier;
+      const sc = () => Math.max(0, Math.min(100, skill - (tier - 2) * 12 - (g.hunger ? 8 : 0) + (r() - 0.5) * 20));
       S.finishSession(g, sc(), r());
       if (g.phase === 'lunch') { S.lunch(g, g.lunchbox ? 'lunchbox' : g.money > 20000 ? 'hamba' : 'ramen'); S.finishSession(g, sc(), r()); }
       S.payday(g, r());
@@ -240,13 +303,16 @@ function career(bg: BgId, skill: number, days: number, seed: number) {
       if (!S.hasSafety(g) && !g.study && g.money > 60000) S.startStudy(g, 'safety');
       else if (!g.study && g.money > 400000 && !g.licenses.includes('signal') && S.hasSafety(g)) S.startStudy(g, 'signal');
       if (!g.gear.includes('gloves') && g.money > 100000) S.buyGear(g, 'gloves');
-      const ev = g.study ? 'study' : g.unpaid.some((u) => u.due === null) ? 'report' : g.fatigue > 55 ? 'sauna' : g.mood < 40 ? 'pocha' : 'cook';
+      const ev = g.home !== 'room' && S.canEvening(g, 'room') && g.money > S.rentOf(g) + 30000 ? 'room' : g.study ? 'study' : g.unpaid.some((u) => u.due === null) ? 'report' : g.fatigue > 55 ? 'sauna' : g.mood < 40 ? 'pocha' : 'cook';
       if (!S.evening(g, ev)) S.evening(g, 'sleep');
     }
+    const wasRoom = g.home === 'room';
     S.night(g);
+    if (wasRoom && g.home !== 'room') evicted++;
+    if (g.hunger) hungry++;
     if (g.phase !== 'ending') S.sleep(g);
   }
-  return { g, ended };
+  return { g, ended, fell, evicted, hungry };
 }
 
 test('봇 60일: 잘하면 목표에 닿고, 못하면 겨우 버틴다', () => {
@@ -255,7 +321,8 @@ test('봇 60일: 잘하면 목표에 닿고, 못하면 겨우 버틴다', () => 
     const e = (c: any) => c.ended ? c.ended + '일째 목표' : '못 닿음';
     console.log(`  ${bg}: 잘함 ${e(good)} 번 돈 ${S.won(good.g.earned)} / 보통 ${e(mid)} ${S.won(mid.g.earned)} / 서툼 ${e(bad)} ${S.won(bad.g.earned)} (일한 날 ${good.g.worked}/${mid.g.worked}/${bad.g.worked}, 칭호 ${S.rank(good.g)})`);
     assert.ok(good.ended >= 20 && good.ended <= 60, bg + ' 잘하면 20~60일 사이에 목표 (' + good.ended + ')');
-    assert.ok(!mid.ended || mid.ended > good.ended, bg + ' 보통은 더 늦게');
+    assert.ok(!mid.ended || mid.ended >= good.ended, bg + ' 보통은 더 늦게');
+    assert.ok(!good.fell && !mid.fell, bg + ' 보통 모드에서 웬만하면 쓰러지지 않는다');
     assert.ok(!bad.ended || bad.ended > (mid.ended || 0) + 20, bg + ' 서툴면 훨씬 늦거나 못 닿음');
     assert.ok(good.g.earned > mid.g.earned && mid.g.earned > bad.g.earned * 1.2, bg + ' 잘할수록 더 번다');
   }
@@ -270,4 +337,16 @@ test('일 게시판에는 공장·물류 일이 꼭 하나는 있다', () => {
       assert.ok(b.some((j) => !JOBS[j.kind].build), '이수증 없이 갈 곳이 없음 ' + seed);
     }
   }
+});
+
+test('고된 삶: 잘해야 겨우 꿈, 서툴면 가난이 찾아온다', () => {
+  let poor = 0;
+  for (const bg of BG_IDS) {
+    const good = career(bg, 85, 80, 21, 'hard'), bad = career(bg, 25, 80, 23, 'hard');
+    const e = (c: any) => c.fell ? c.fell + '일째 쓰러짐' : c.ended ? c.ended + '일째 목표' : '못 닿음';
+    console.log(`  고된 ${bg}: 잘함 ${e(good)} (쫓겨남 ${good.evicted}, 굶은 밤 ${good.hungry}) / 서툼 ${e(bad)} (쫓겨남 ${bad.evicted}, 굶은 밤 ${bad.hungry})`);
+    assert.ok(good.ended && !good.fell, bg + ' 잘하면 고된 삶에서도 꿈');
+    if (bad.evicted + bad.hungry > 0 || bad.fell) poor++;
+  }
+  assert.ok(poor >= 2, '서툴면 대부분 가난을 겪는다 (' + poor + '/3)');
 });

@@ -1,10 +1,12 @@
 // 장면 그림: 새벽 거리·인력사무소·고시원·함바집·포장마차, 그리고 다섯 가지 현장
 import { tile, person, rect, text, INK, T, type Look } from './tiles.ts';
-import { Sort, Line, Pipe, Crane, Clean, type Mini } from '../games/mini.ts';
+import { Sort, Line, Pipe, Crane, Clean, BrickWall, Kitchen, Rebar, type Mini } from '../games/mini.ts';
 import { NPCS, type NpcId, type Weather, type Kind } from '../core/data.ts';
 
 export const W = 320, H = 180;
 export const ME: Look = { helmet: 'yellow', suit: 'grey', hair: 'black' };
+/** 가난해질수록 작업복이 낡는다 */
+export const meLook = (poor = 0): Look => poor >= 2 ? { helmet: 'white', suit: 'brown', hair: 'grey' } : poor === 1 ? { helmet: 'yellow', suit: 'brown', hair: 'black' } : ME;
 export const npcLook = (id: NpcId): Look => ({
   helmet: NPCS[id].helmet,
   suit: ({ kim: 'navy', park: 'brown', nguyen: 'grey', sujin: 'orange', minsu: 'green' } as Record<NpcId, string>)[id],
@@ -62,8 +64,8 @@ function van(c: CanvasRenderingContext2D, x: number, y: number, lights: boolean)
 }
 
 // ─────────── 장면 ───────────
-export type SceneName = 'title' | 'room' | 'roomNight' | 'office' | 'lunch' | 'pocha' | 'street' | 'site' | 'end';
-export interface SceneOpt { wx: Weather; t: number; kind?: Kind; npc?: NpcId; crowd?: number; me?: boolean; gone?: boolean }
+export type SceneName = 'title' | 'room' | 'roomNight' | 'office' | 'lunch' | 'pocha' | 'street' | 'site' | 'end' | 'sauna' | 'outside' | 'fall';
+export interface SceneOpt { wx: Weather; t: number; kind?: Kind; npc?: NpcId; crowd?: number; me?: boolean; gone?: boolean; night?: boolean; poor?: number }
 
 export function scene(c: CanvasRenderingContext2D, name: SceneName, o: SceneOpt): void {
   c.imageSmoothingEnabled = false;
@@ -96,7 +98,7 @@ export function scene(c: CanvasRenderingContext2D, name: SceneName, o: SceneOpt)
         person(c, EXTRAS[i % EXTRAS.length], x, y, i % 2 === 0);
         if (i % 3 === 0) { rect(c, x + 12, y + 2, 3, 4, '#f4f0e8'); const s = (t * 0.6 + i) % 1; c.fillStyle = `rgba(255,255,255,${0.5 - s * 0.5})`; c.fillRect(x + 13, y - 2 - s * 8, 1, 2); }
       }
-      if (o.me) person(c, ME, 86, 142, false, 1, Math.abs(Math.sin(t * 2)) * 0.6);
+      if (o.me) person(c, meLook(o.poor), 86, 142, false, 1, Math.abs(Math.sin(t * 2)) * 0.6);
       if (!o.gone) van(c, 150, 134, true);
       rect(c, 8, 26, 34, 12, '#1a1622', INK); text(c, '04:50', 25, 32, '#ff6a5a', 'center', 9);
       weatherFx(c, o.wx, t);
@@ -118,7 +120,7 @@ export function scene(c: CanvasRenderingContext2D, name: SceneName, o: SceneOpt)
       // 이불·베개
       rect(c, 6, 112, 112, 26, '#7a8ab0', INK); rect(c, 10, 104, 34, 14, '#f0eadc', INK);
       rect(c, 46, 108, 70, 18, '#9aa8c8', INK);
-      person(c, ME, 18, 96, false, 1, night ? 0 : Math.abs(Math.sin(t * 1.4)));
+      person(c, meLook(o.poor), 18, 96, false, 1, night ? 0 : Math.abs(Math.sin(t * 1.4)));
       // 알람 시계
       rect(c, 122, 118, 26, 14, '#d8d2c8', INK); text(c, night ? '23:10' : '04:30', 135, 125, night ? '#7ad0ff' : '#ff6a5a', 'center', 9);
       if (!night && Math.floor(t * 3) % 2 === 0) text(c, '따르릉', 135, 108, '#ffe08a', 'center', 9);
@@ -158,10 +160,57 @@ export function scene(c: CanvasRenderingContext2D, name: SceneName, o: SceneOpt)
       weatherFx(c, o.wx, t);
       break;
     }
+    case 'sauna': {
+      // 찜질방 수면실: 어두운 방, 매트에 누운 사람들
+      rect(c, 0, 0, W, H, '#2a2226');
+      rect(c, 0, 0, W, 20, '#3a2e30');
+      for (let x = 10; x < W; x += 40) { rect(c, x, 8, 24, 4, '#ffb070'); c.fillStyle = 'rgba(255,170,100,.08)'; c.fillRect(x - 10, 12, 44, 160); }
+      text(c, '수면실 · 정숙', 79, 30, '#e8c8a0', 'center', 9);
+      for (let row = 0; row < 3; row++) for (let i = 0; i < 4; i++) {
+        const x = 6 + i * 40, y = 60 + row * 34;
+        rect(c, x, y + 8, 34, 10, row === 2 && i === 0 ? '#8a6a5a' : '#6a5048', INK);
+        if (!(row === 2 && i === 0)) person(c, EXTRAS[(row * 4 + i) % EXTRAS.length], x + 2, y - 2, i % 2 === 0);
+      }
+      person(c, meLook(o.poor), 8, 126, false, 1, o.night ? 0 : Math.abs(Math.sin(t * 1.4)));
+      rect(c, 26, 136, 12, 6, '#d8d0c0', INK);       // 사물함 열쇠
+      for (let i = 0; i < 3; i++) { const z = (t * 0.4 + i * 0.33) % 1; text(c, 'z', 60 + i * 30 + z * 6, 70 - z * 12, `rgba(255,255,255,${0.6 - z * 0.6})`, 'center', 8, false); }
+      if (!o.night) text(c, '05:10', 135, 40, '#ff6a5a', 'center', 9);
+      break;
+    }
+    case 'outside': {
+      // 거리: 공원 벤치, 가로등, 박스
+      sky(c, o.night ? 'night' : 'dawn', o.wx, 120);
+      city(c, 118, o.night ? '#151224' : '#3a3048', o.night ? '#a08050' : null, 4);
+      rect(c, 0, 118, W, 62, '#2a2a30');
+      for (let x = 0; x < W; x += 20) rect(c, x, 150, 10, 2, '#3a3a44');
+      // 가로등
+      rect(c, 118, 40, 3, 78, '#4a4a54'); rect(c, 110, 38, 18, 4, '#5a5a64');
+      c.fillStyle = o.night ? 'rgba(255,220,140,.22)' : 'rgba(255,220,140,.06)'; c.beginPath(); c.moveTo(112, 42); c.lineTo(80, 150); c.lineTo(158, 150); c.lineTo(126, 42); c.fill();
+      // 벤치·박스·비닐봉지
+      rect(c, 26, 120, 76, 6, '#8a5a3a', INK); rect(c, 30, 126, 4, 12, '#5a3a2a'); rect(c, 94, 126, 4, 12, '#5a3a2a');
+      rect(c, 28, 114, 72, 6, '#c8a070', INK);    // 깐 박스
+      person(c, meLook(Math.max(1, o.poor ?? 1)), 40, 102, false, 1, 0);
+      rect(c, 58, 106, 40, 8, '#6a7a9a', INK);   // 덮은 점퍼
+      rect(c, 8, 132, 14, 10, '#d8d8d0', INK);    // 비닐봉지
+      if (o.wx === 'cold' || o.wx === 'rain' || o.night) for (let i = 0; i < 2; i++) { const z = (t * 0.6 + i * 0.5) % 1; c.fillStyle = `rgba(255,255,255,${0.5 - z * 0.5})`; c.fillRect(Math.round(44 + z * 6), Math.round(100 - z * 10), 3, 2); }
+      weatherFx(c, o.wx, t);
+      break;
+    }
+    case 'fall': {
+      // 병원 침대
+      rect(c, 0, 0, W, H, '#d8e0e4'); rect(c, 0, 128, W, 52, '#b8c4c8');
+      rect(c, 80, 30, 66, 46, '#9ac0d8', INK); rect(c, 112, 30, 2, 46, INK);
+      rect(c, 10, 104, 120, 22, '#f4f4f0', INK); rect(c, 14, 98, 30, 12, '#ffffff', INK);
+      person(c, meLook(2), 20, 90, false, 1, 0);
+      rect(c, 50, 104, 76, 14, '#a8c8e0', INK);
+      rect(c, 136, 40, 2, 70, '#8a9aa0'); rect(c, 130, 44, 14, 18, '#e8f0f4', INK);
+      c.strokeStyle = '#8a9aa0'; c.beginPath(); c.moveTo(137.5, 62); c.lineTo(60, 104); c.stroke();
+      break;
+    }
     case 'site': {
       siteBg(c, o.kind ?? 'clean', o.wx);
       // 현장 소품
-      const props: Record<Kind, number[]> = { clean: [109, 126, 117], sort: [73, 85, 110], line: [75, 111, 74], pipe: [94, 123, 92], crane: [124, 125, 72] };
+      const props: Record<Kind, number[]> = { clean: [109, 126, 117], sort: [73, 85, 110], line: [75, 111, 74], pipe: [94, 123, 92], crane: [124, 125, 72], brick: [85, 97, 123], kitchen: [126, 86, 98], rebar: [116, 107, 117] };
       props[o.kind ?? 'clean'].forEach((i, k) => tile(c, i, 12 + k * 18, 140));
       person(c, ME, 56, 116, false, 1, Math.abs(Math.sin(t * 3)));
       if (o.npc) person(c, npcLook(o.npc), 84, 116, true);
@@ -172,7 +221,7 @@ export function scene(c: CanvasRenderingContext2D, name: SceneName, o: SceneOpt)
 }
 
 function siteBg(c: CanvasRenderingContext2D, kind: Kind, wx: Weather): void {
-  const indoor = kind === 'sort' || kind === 'line';
+  const indoor = kind === 'sort' || kind === 'line' || kind === 'kitchen';
   if (indoor) {
     rect(c, 0, 0, W, H, '#3a3242');
     for (let x = 0; x < W; x += T) { tile(c, 44 + (x / T) % 4, x, 0); tile(c, 44 + (x / T + 2) % 4, x, 16); }
@@ -192,11 +241,14 @@ export function drawMini(c: CanvasRenderingContext2D, m: Mini, wx: Weather): voi
   else if (m instanceof Pipe) drawPipe(c, m);
   else if (m instanceof Crane) drawCrane(c, m, wx);
   else if (m instanceof Clean) drawClean(c, m, wx);
+  else if (m instanceof BrickWall) drawBrick(c, m, wx);
+  else if (m instanceof Kitchen) drawKitchen(c, m);
+  else if (m instanceof Rebar) drawRebar(c, m, wx);
   for (const p of m.pops) text(c, p.text, p.x, p.y - p.t * 18, p.good ? '#bff07a' : '#ff8a7a', 'center', 10);
   // 남은 시간 막대
   const f = m.left() / m.dur;
   rect(c, 8, 4, 304, 6, INK); rect(c, 9, 5, 302 * f, 4, f < 0.2 ? '#ff6a5a' : '#ffd06a');
-  if (wx === 'rain' && !(m instanceof Sort) && !(m instanceof Line)) weatherFx(c, wx, m.t);
+  if (wx === 'rain' && !(m instanceof Sort) && !(m instanceof Line) && !(m instanceof Kitchen)) weatherFx(c, wx, m.t);
 }
 function conveyor(c: CanvasRenderingContext2D, y: number, x0: number, x1: number, t: number, speed: number, flip: boolean): void {
   const frames = [37, 38, 39];
@@ -301,4 +353,76 @@ function drawClean(c: CanvasRenderingContext2D, m: Clean, wx: Weather): void {
   text(c, `치운 것 ${m.delivered}/${m.target()}`, 312, 20, '#bff07a', 'right', 10);
   text(c, `들고 있음 ${m.carry}/3`, 8, 20, '#ffe08a', 'left', 9);
   weatherFx(c, wx, m.t);
+}
+
+function drawBrick(c: CanvasRenderingContext2D, m: BrickWall, wx: Weather): void {
+  siteBg(c, 'brick', wx);
+  const H2 = BrickWall.H;
+  rect(c, 0, BrickWall.BASE, W, H - BrickWall.BASE, '#6a5a50');
+  m.stack.forEach((b, i) => {
+    const y = m.y(i) ;
+    if (y > H) return;
+    rect(c, b.x - b.w / 2, y, b.w, H2, i === 0 ? '#8a8a8a' : b.perfect ? '#c85a3a' : '#b8583a', INK);
+    if (i > 0) rect(c, b.x - b.w / 2 + 2, y + 2, b.w - 4, 2, '#e88a6a');
+  });
+  if (m.wait <= 0) {
+    const y = m.y(m.stack.length) - 14;
+    rect(c, m.x - m.w / 2, y, m.w, H2, '#e86a4a', INK);
+    rect(c, m.x - m.w / 2 + 2, y + 2, m.w - 4, 2, '#ffa080');
+    rect(c, m.x, y - 10, 1, 10, '#ffe08a');
+  }
+  if (m.fallen > 0) text(c, '와르르', 160, 110, '#ff8a7a', 'center', 14);
+  person(c, ME, 8, BrickWall.BASE - 16, false);
+  person(c, npcLook('park'), 296, BrickWall.BASE - 16, true);
+  text(c, `쌓은 줄 ${m.stack.length - 1}`, 312, 20, '#bff07a', 'right', 10);
+  text(c, `벽 ${m.walls}번째`, 8, 20, '#ffe08a', 'left', 9);
+}
+const DISH = ['백반', '국밥', '찌개', '국수'];
+const ARROW: Record<string, string> = { U: '▲', D: '▼', L: '◀', R: '▶' };
+function drawKitchen(c: CanvasRenderingContext2D, m: Kitchen): void {
+  siteBg(c, 'kitchen', 'sun');
+  rect(c, 0, 120, W, 60, '#8a7060'); rect(c, 0, 118, W, 4, '#b89878');
+  tile(c, 126, 20, 102); tile(c, 126, 40, 102); tile(c, 86, 270, 102);
+  person(c, ME, 60, 102 + (m.shake > 0 ? Math.sin(m.t * 60) * 2 : 0), false);
+  person(c, npcLook('oh'), 100, 102, true);
+  m.orders.forEach((o, i) => {
+    const x = 150 + i * 56, y = 34, w = 52;
+    rect(c, x, y, w, 70, i === 0 ? '#fff4de' : '#d8c8b0', INK);
+    text(c, DISH[o.dish], x + w / 2, y + 12, '#c85a2a', 'center', 10, true);
+    const f = Math.max(0, o.t / o.max);
+    rect(c, x + 4, y + 62, (w - 8) * f, 4, f < 0.3 ? '#e84a3a' : '#7ad07a');
+    o.seq.forEach((a, k) => {
+      const ax = x + 6 + (k % 4) * 11, ay = y + 28 + Math.floor(k / 4) * 14;
+      text(c, ARROW[a], ax + 4, ay, k < o.pos ? '#9a8a7a' : i === 0 && k === o.pos ? '#e86a1a' : '#3f2631', 'center', 10, true);
+    });
+  });
+  text(c, `나간 밥 ${m.served}`, 312, 20, '#bff07a', 'right', 10);
+  text(c, '맨 왼쪽 주문부터 화살표를 순서대로', 8, 172, '#ffe08a', 'left', 9);
+}
+function drawRebar(c: CanvasRenderingContext2D, m: Rebar, wx: Weather): void {
+  siteBg(c, 'rebar', wx);
+  const ground = 150, px = 60, p = m.pos();
+  rect(c, 0, ground, W, H - ground, '#7a6050');
+  for (let x = -((p * 1) % 24); x < W; x += 24) rect(c, x, ground + 6, 12, 2, '#6a5040');
+  // 걸림돌
+  for (const x of m.rocks) { const sx = px + (x - p); if (sx > -20 && sx < W + 20) { tile(c, 117, sx - 8, ground - 12); } }
+  // 도착 지점
+  const ex = px + (Rebar.TRIP - p);
+  if (ex < W + 20) { tile(c, 125, ex - 4, ground - 18); rect(c, ex + 10, ground - 6, 30, 6, '#5a6a8a', INK); }
+  const jy = m.jump > 0 ? Math.sin((1 - m.jump / 0.55) * Math.PI) * 16 : 0;
+  const by = ground - 16 - jy;
+  person(c, ME, px - 8, by, false, 1, m.stall > 0 ? 0 : Math.abs(Math.sin(m.t * 10)));
+  // 어깨 위 철근 (기울기 th)
+  if (m.stall <= 0 || Math.floor(m.t * 8) % 2 === 0) {
+    const cx = px, cy = by + 4, L = 54;
+    const dx = Math.cos(m.th) * L, dy = Math.sin(m.th) * L;
+    c.strokeStyle = INK; c.lineWidth = 4; c.beginPath(); c.moveTo(cx - dx, cy - dy); c.lineTo(cx + dx, cy + dy); c.stroke();
+    c.strokeStyle = '#8a8a9a'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx - dx, cy - dy); c.lineTo(cx + dx, cy + dy); c.stroke();
+  }
+  // 기울기 막대
+  const f = m.th / 0.62;
+  rect(c, 110, 26, 100, 8, INK); rect(c, 160 + f * 48 - 3, 27, 6, 6, Math.abs(f) > 0.7 ? '#ff6a5a' : Math.abs(f) > 0.4 ? '#ffd06a' : '#7ad07a');
+  rect(c, 159, 25, 2, 10, '#fff4de');
+  text(c, `나른 묶음 ${m.trips}`, 312, 20, '#bff07a', 'right', 10);
+  text(c, `${Math.round(m.dist)}m`, 8, 20, '#ffe08a', 'left', 9);
 }

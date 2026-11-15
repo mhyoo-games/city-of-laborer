@@ -2,13 +2,15 @@
 // 사람·회사·현장 이름은 모두 지어낸 것.
 
 /** 현장 일의 종류 = 미니게임 */
-export type Kind = 'clean' | 'sort' | 'line' | 'pipe' | 'crane';
+export type Kind = 'clean' | 'sort' | 'line' | 'pipe' | 'crane' | 'brick' | 'kitchen' | 'rebar';
 export type LicenseId = 'safety' | 'signal' | 'forklift' | 'welding';
 export type GearId = 'gloves' | 'knee' | 'belt' | 'boots' | 'thermos';
 export type MealId = 'hamba' | 'ramen' | 'lunchbox' | 'skip';
-export type EveningId = 'pocha' | 'konbini' | 'cook' | 'sauna' | 'call' | 'study' | 'report' | 'sleep';
+export type EveningId = 'pocha' | 'konbini' | 'cook' | 'sauna' | 'call' | 'study' | 'report' | 'sleep' | 'room';
 export type BgId = 'youth' | 'father' | 'elder';
-export type NpcId = 'kim' | 'park' | 'nguyen' | 'sujin' | 'minsu';
+export type NpcId = 'kim' | 'park' | 'nguyen' | 'sujin' | 'minsu' | 'oh';
+export type Mode = 'normal' | 'hard';
+export type Home = 'room' | 'sauna' | 'street';
 export type Weather = 'sun' | 'cloud' | 'rain' | 'heat' | 'cold';
 
 export interface JobKind {
@@ -45,8 +47,43 @@ export const JOBS: Record<Kind, JobKind> = {
     sites: ['해돋이 아파트 12층 골조', '강변 오피스텔 철골', '항만 하역장', '교량 보강 공사'],
     howto: '←→로 크레인을 움직이고 ↓를 누르고 있으면 내려가요. 흔들림이 멎었을 때 깃발 위에 살며시 내려놓아요.',
     tip: '짐이 흔들리면 따라가지 말고 기다려. 신호수가 급하면 사람이 다친다.' },
+  brick: { id: 'brick', name: '벽돌 쌓기', short: '조적', build: true, base: 155000, hard: 2, risk: 2, npc: 'park',
+    sites: ['새말 초등학교 담장', '시장 골목 상가 리모델링', '전원주택 단지', '강변 공원 화장실 신축'],
+    howto: '벽돌이 좌우로 오가요. Z로 떨어뜨려 아래 벽돌 위에 딱 맞게 쌓아요. 삐져나온 만큼 잘려 나가고, 다 잘리면 처음부터 다시 쌓아요.',
+    tip: '줄눈이 삐뚤면 담이 운다. 눈으로 쫓지 말고 박자로 봐.' },
+  kitchen: { id: 'kitchen', name: '함바 주방 보조', short: '주방', build: false, base: 115000, hard: 2, risk: 1, npc: 'oh',
+    sites: ['해돋이 현장 함바 식당', '산업단지 구내식당', '물류센터 야식 주방', '시장 국밥집'],
+    howto: '주문마다 뜨는 화살표를 순서대로 눌러요. 틀리면 그 주문은 처음부터, 너무 늦으면 손님이 기다리다 가요.',
+    tip: '밥은 사람 입에 들어가는 거야. 급해도 순서는 지켜.' },
+  rebar: { id: 'rebar', name: '철근 나르기', short: '철근', build: true, base: 160000, hard: 3, risk: 2, npc: 'minsu',
+    sites: ['해돋이 아파트 12층 골조', '구청 신청사 기초', '교량 보강 공사', '강변 오피스텔 공사장'],
+    howto: '어깨에 멘 철근이 기울면 ←→로 바로잡아요. 바닥에 걸림돌이 나오면 ↑로 넘어요. 너무 기울면 떨어뜨려요.',
+    tip: '철근은 힘으로 드는 게 아니라 균형으로 드는 거래요. 반장님이 그랬어요.' },
 };
-export const KINDS: Kind[] = ['clean', 'sort', 'line', 'pipe', 'crane'];
+export const KINDS: Kind[] = ['clean', 'sort', 'line', 'pipe', 'crane', 'brick', 'kitchen', 'rebar'];
+
+/** 일마다 난이도: 쉬움은 일당이 조금 적고, 빡셈은 많이 주지만 현장 게임이 어렵다 */
+export interface Tier { id: 1 | 2 | 3; name: string; pay: number; d: number; hire: number }
+export const TIERS: Record<1 | 2 | 3, Tier> = {
+  1: { id: 1, name: '쉬움', pay: 0.92, d: -0.12, hire: -0.05 },
+  2: { id: 2, name: '보통', pay: 1, d: 0, hire: 0 },
+  3: { id: 3, name: '빡셈', pay: 1.2, d: 0.24, hire: 0.06 },
+};
+
+/** 게임 난이도 */
+export interface ModeInfo { id: Mode; name: string; desc: string; living: number; rent: number; d: number; hire: number; injury: number; bills: number; weekly: number }
+export const MODES: Record<Mode, ModeInfo> = {
+  normal: { id: 'normal', name: '보통', desc: '처음이라면 이쪽. 방값 9만 5천 원, 하루 생활비 8천 원.', living: 8000, rent: 95000, d: 0, hire: 0, injury: 1, bills: 0.12, weekly: 1 },
+  hard: { id: 'hard', name: '고된 삶', desc: '물가는 비싸고 일은 거칠다. 방값 13만 원, 생활비 1만 2천 원, 청구서가 자주 오고, 현장이 더 어렵고 잘 안 뽑힌다.', living: 12000, rent: 130000, d: 0.15, hire: -0.06, injury: 1.4, bills: 0.22, weekly: 1.4 },
+};
+/** 가끔 날아오는 청구서 */
+export const BILLS: Array<[string, number]> = [
+  ['휴대폰 요금이 빠져나갔다.', 45000], ['작업화 밑창이 떨어져 새로 샀다.', 38000], ['친구 결혼식 축의금을 보냈다.', 50000],
+  ['이가 아파 치과에 갔다.', 70000], ['고시원 세탁기가 고장 나 빨래방에 갔다.', 12000], ['감기약과 파스를 샀다.', 18000],
+  ['고향 친척 부고. 조의금을 보냈다.', 50000], ['교통카드를 잃어버렸다.', 20000], ['안경테가 부러졌다.', 35000],
+];
+export const SAUNA_NIGHT = 9000;   // 찜질방에서 하룻밤
+export const ADVANCE = 50000;      // 소장님 가불
 
 export interface License { id: LicenseId; name: string; cost: number; nights: number; desc: string }
 export const LICENSES: Record<LicenseId, License> = {
@@ -85,23 +122,25 @@ export const EVENINGS: Record<EveningId, Evening> = {
   study: { id: 'study', name: '자격증 공부', cost: 0, mood: -4, fatigue: 5, desc: '야간 학원. 졸린 눈을 비비며.' },
   report: { id: 'report', name: '노동청에 진정 넣기', cost: 0, mood: 4, fatigue: 0, desc: '못 받은 일당. 서류를 꼼꼼히 적었다.' },
   sleep: { id: 'sleep', name: '그냥 일찍 자기', cost: 0, mood: 0, fatigue: -8, desc: '씻고 바로 눕는다.' },
+  room: { id: 'room', name: '고시원 다시 들어가기', cost: 0, mood: 18, fatigue: -6, desc: '일주일 치 방값을 내고 다시 내 방으로.' },
 };
 
 export interface Background {
   id: BgId; name: string; age: string; story: string;
   goal: number; goalName: string; money: number; rep: number; staminaMax: number; recover: number;
   skill: Partial<Record<Kind, number>>; licenses: LicenseId[]; family: string;
+  weekly: number; weeklyName: string;     // 일주일마다 꼭 나가는 돈
 }
 export const BACKGROUNDS: Record<BgId, Background> = {
-  youth: { id: 'youth', name: '청년', age: '27살', family: '어머니',
+  youth: { id: 'youth', name: '청년', age: '27살', family: '어머니', weekly: 60000, weeklyName: '학자금 대출 갚기',
     story: '이력서를 서른 군데 넘게 냈다. 연락은 오지 않고 통장은 바닥났다. 일단 몸으로 벌어 보기로 했다.',
     goal: 3000000, goalName: '고시원을 나와 원룸 보증금 마련하기', money: 120000, rep: 15, staminaMax: 100, recover: 1.1,
     skill: {}, licenses: [] },
-  father: { id: 'father', name: '가장', age: '43살', family: '아내와 딸',
+  father: { id: 'father', name: '가장', age: '43살', family: '아내와 딸', weekly: 140000, weeklyName: '집에 생활비 보내기',
     story: '십 년 하던 분식집을 접었다. 빚은 남았고 딸아이 학원비는 기다려 주지 않는다. 새벽 인력시장에 처음 나왔다.',
     goal: 5000000, goalName: '딸의 대학 첫 등록금 모으기', money: 200000, rep: 25, staminaMax: 92, recover: 1.0,
     skill: { line: 60, clean: 60 }, licenses: ['safety'] },
-  elder: { id: 'elder', name: '어르신', age: '63살', family: '아내',
+  elder: { id: 'elder', name: '어르신', age: '63살', family: '아내', weekly: 50000, weeklyName: '아내 약값',
     story: '배관 일만 삼십 년. 정년이 지났어도 손은 아직 기억한다. 아내와 한 번도 못 가 본 제주도에 가 보고 싶다.',
     goal: 4000000, goalName: '아내와 제주도 여행 가기', money: 300000, rep: 55, staminaMax: 75, recover: 0.8,
     skill: { pipe: 400, crane: 180, clean: 60 }, licenses: ['safety', 'signal'] },
@@ -159,8 +198,15 @@ export const NPCS: Record<NpcId, Npc> = {
     ['"오늘 반장님이 저보고 일 좀 한다고 했어요!" 민수는 하루 종일 싱글벙글했다.'],
     ['"형, 저 다음 주에 복학해요. 근데 방학 때 또 올 거예요." 민수가 안전모를 꾹 눌러썼다.', '"여기 사람들 좋아요. 학교보다 더 많이 배웠어요."'],
   ] },
+  oh: { id: 'oh', name: '오 여사님', role: '함바 주방 30년 · 50대', helmet: 'white', stories: [
+    ['"밥 더 먹어. 젊은 사람이 그거 먹고 어떻게 일해." 여사님이 밥을 한 주걱 더 얹어 주셨다.'],
+    ['"우리 그이도 현장 사람이었어. 비계 위에서 일했지." 여사님이 국자를 잠깐 내려놓았다.', '"그래서 나는 여기서 밥을 해. 현장 사람 밥은 내가 제일 잘 알거든."'],
+    ['"새벽 세 시에 쌀을 씻으면 손이 다 터져. 그래도 다들 맛있다고 하면 그걸로 됐어."'],
+    ['"요즘 젊은 사람들 컵라면만 먹는 거 보면 속상해." 여사님이 반찬통 하나를 몰래 쥐여 주셨다.', '"남은 거야. 버리기 아까워서 그래."'],
+    ['"나 내년에 작은 백반집 차린다. 간판은 ‘현장 밥집’으로 할 거야."', '"문 열면 와. 너는 평생 공짜다."'],
+  ] },
 };
-export const NPC_IDS: NpcId[] = ['kim', 'park', 'nguyen', 'sujin', 'minsu'];
+export const NPC_IDS: NpcId[] = ['kim', 'park', 'nguyen', 'sujin', 'minsu', 'oh'];
 
 // ─────────── 소장님·반장님 말 ───────────
 export const BOSS_LINES = {
@@ -188,7 +234,7 @@ export const STAMPS: Stamp[] = [
   { id: 'week', name: '일주일 버티기', desc: '7일을 버텼다' },
   { id: 'streak5', name: '개근', desc: '5일 연속 출근' },
   { id: 'named3', name: '지명 단골', desc: '3번 연속 지명받았다' },
-  { id: 'allJobs', name: '안 해 본 일 없음', desc: '다섯 가지 일을 다 해 봤다' },
+  { id: 'allJobs', name: '안 해 본 일 없음', desc: '처음 다섯 가지 일을 다 해 봤다' },
   { id: 'license', name: '자격증', desc: '자격증·이수증을 하나 땄다' },
   { id: 'allLicense', name: '자격증 부자', desc: '자격증·이수증을 다 땄다' },
   { id: 'story', name: '말동무', desc: '한 사람의 이야기를 끝까지 들었다' },
@@ -198,6 +244,9 @@ export const STAMPS: Stamp[] = [
   { id: 'master', name: '명인', desc: '한 가지 일에서 명인이 됐다' },
   { id: 'million', name: '백만 원', desc: '모은 돈이 백만 원을 넘었다' },
   { id: 'goal', name: '꿈을 이뤘다', desc: '목표 금액을 모았다' },
+  { id: 'comeback', name: '다시 내 방', desc: '거리에서 버텨 다시 방을 얻었다' },
+  { id: 'tough', name: '빡센 날', desc: '빡센 일에서 S를 받았다' },
+  { id: 'allNew', name: '여덟 가지 일', desc: '여덟 가지 일을 다 해 봤다' },
 ];
 
 // ─────────── 일기 ───────────
@@ -217,5 +266,12 @@ export const DIARY = {
   unpaid: '일당을 못 받았다. 다음 주에 준다는데, 믿어도 될까.',
   repaid: '못 받았던 일당이 들어왔다. 진정 넣길 잘했다.',
   rent: '방값을 냈다. 통장이 또 가벼워졌다.',
-  noRent: '방값을 못 냈다. 총무님 눈치가 보인다.',
+  noRent: '방값을 못 냈다. 총무님이 다음 주까지는 꼭 내라고 했다.',
+  evicted: '결국 방에서 나왔다. 짐은 가방 두 개가 전부였다.',
+  hungry: ['돈이 없어 저녁을 걸렀다. 물로 배를 채웠다.', '편의점 앞에서 한참 서 있다가 그냥 돌아섰다.', '배에서 꼬르륵 소리가 멈추지 않는다.'],
+  sauna: ['찜질방 수면실. 코 고는 소리 사이에서 겨우 잠들었다.', '찜질방 사물함에 작업복을 구겨 넣었다.'],
+  street: ['공원 벤치에서 잤다. 박스를 두 겹 깔았다.', '지하도 계단 밑. 새벽 바람이 뼛속까지 들어온다.', '역 대합실에서 쫓겨났다. 밤새 걸었다.'],
+  sick: '밤새 떨었다. 몸이 불덩이 같다.',
+  backHome: '다시 내 방이다. 좁아도 문을 잠글 수 있다는 게 이렇게 좋을 줄 몰랐다.',
+  advance: '소장님께 가불을 부탁했다. 다음 일당에서 빼기로 했다.',
 };
